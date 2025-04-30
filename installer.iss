@@ -1,8 +1,8 @@
-#define MyAppName "Real-time Screen Translator"
-#define MyAppVersion "2.0.1"
+#define MyAppName "Dainn Screen Translator"
+#define MyAppVersion "1.0.0"
 #define MyAppPublisher "Dainn"
 #define MyAppURL "https://github.com/dainn/trans"
-#define MyAppExeName "trans.exe"
+#define MyAppExeName "DainnScreenTranslator.exe"
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
@@ -20,8 +20,8 @@ DisableProgramGroupPage=yes
 ; Uncomment the following line to run in administrative install mode (install for all users.)
 ;PrivilegesRequired=admin
 OutputDir=installer
-OutputBaseFilename=trans-setup-2.0.1
-Compression=lzma
+OutputBaseFilename=DainnScreenTranslator_Setup_v1.0.0
+Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 
@@ -32,8 +32,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "dist\trans\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\trans\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "config\config.ini"; DestDir: "{app}\config"; Flags: ignoreversion
+Source: "resources\logo.ico"; DestDir: "{app}\resources"; Flags: ignoreversion
+Source: "resources\logo.png"; DestDir: "{app}\resources"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
