@@ -3,7 +3,7 @@
 block_cipher = None
 
 a = Analysis(
-    ['main.py'],
+    ['src/main.py'],
     pathex=[],
     binaries=[],
     datas=[
@@ -13,12 +13,19 @@ a = Analysis(
         ('file_version_info.txt', '.'),
     ],
     hiddenimports=[
-        'google.cloud.vision_v1',
-        'google.cloud.translate_v2',
+        'easyocr',
+        'torch',
+        'torchvision',
+        'numpy',
+        'PIL',
+        'google.cloud.vision',
+        'google.cloud.translate',
+        'screeninfo',
+        'pyautogui',
+        'cv2',
         'PyQt5.QtWidgets',
         'PyQt5.QtGui',
         'PyQt5.QtCore',
-        'PIL.Image',
         'PIL._tkinter_finder',
         'PIL._imaging',
         'pyscreeze',
@@ -32,10 +39,7 @@ a = Analysis(
         'pytesseract',
         'customtkinter',
         'darkdetect',
-        'numpy',
         'cv2',
-        'pyautogui',
-        'screeninfo',
         'configparser',
         'logging',
         'json',
@@ -52,7 +56,7 @@ a = Analysis(
         'html',
         'secrets'
     ],
-    hookspath=['.'],  # Include custom hook-PyQt5.py
+    hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
@@ -109,8 +113,8 @@ exe = EXE(
     version='file_version_info.txt',
     icon='resources\\logo.ico',
     uac_admin=False,
-    onefile=True,
+    onefile=False,
     optimize=2,
-    bundle_files=1,
+    bundle_files=0,
     compressed=True,
 )
