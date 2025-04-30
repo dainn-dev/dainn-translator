@@ -557,6 +557,10 @@ class TranslationWindow(QMainWindow):
             self.is_dragging = True
             self.drag_start_pos = event.globalPos() - self.pos()
             self.setCursor(Qt.SizeAllCursor)
+            
+            # Stop capture when dragging starts
+            if self.is_capturing:
+                self.toggle_capture()
 
     def mouseMoveEvent(self, event):
         """Handle mouse move for dragging."""
@@ -586,6 +590,9 @@ class TranslationWindow(QMainWindow):
                 self.is_dragging = False
                 if self.config_manager and self.window_id:
                     self.config_manager.set_global_setting(f'window_{self.window_id}_pos', f"{self.x()},{self.y()}")
+                # Resume capture when dragging ends
+                if not self.is_capturing:
+                    self.toggle_capture()
             if self.is_resizing:
                 self.is_resizing = False
                 self.resize_timer.stop()
