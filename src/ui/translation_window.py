@@ -188,12 +188,14 @@ class TranslationWindow(QMainWindow):
         # Content area with scroll
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(8, 8, 8, 8)
-        self.content_layout.setSpacing(4)
+        self.content_layout.setContentsMargins(4, 4, 4, 4)
+        self.content_layout.setSpacing(2)
+        self.content_layout.setAlignment(Qt.AlignTop)  # Align entire layout to top
 
         # Name label
         self.name_label = QLabel("")
         self.name_label.setWordWrap(True)
+        self.name_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         font = QFont(self.settings['font_family'], int(self.settings['font_size']))
         if self.settings['font_style'] == 'bold':
             font.setBold(True)
@@ -202,19 +204,23 @@ class TranslationWindow(QMainWindow):
         self.name_label.setFont(font)
         self.name_label.setStyleSheet(
             f"color: {self.settings['name_color']}; background-color: transparent;"
-            "padding: 8px;"
+            "padding: 2px;"
         )
         self.content_layout.addWidget(self.name_label)
 
         # Dialogue label
         self.dialogue_label = QLabel("")
         self.dialogue_label.setWordWrap(True)
+        self.dialogue_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.dialogue_label.setFont(font)
         self.dialogue_label.setStyleSheet(
             f"color: {self.settings['dialogue_color']}; background-color: transparent;"
-            "padding: 8px;"
+            "padding: 2px;"
         )
         self.content_layout.addWidget(self.dialogue_label)
+
+        # Add stretch to push any extra space to the bottom
+        self.content_layout.addStretch()
 
         # Add content widget to frame layout
         self.frame_layout.addWidget(self.content_widget)
@@ -504,12 +510,12 @@ class TranslationWindow(QMainWindow):
         self.name_label.setFont(font)
         self.name_label.setStyleSheet(
             f"color: {self.settings['name_color']}; background-color: transparent;"
-            "padding: 8px;"
+            "padding: 2px;"
         )
         self.dialogue_label.setFont(font)
         self.dialogue_label.setStyleSheet(
             f"color: {self.settings['dialogue_color']}; background-color: transparent;"
-            "padding: 8px;"
+            "padding: 2px;"
         )
         self.position_buttons()
         # Update request counter when settings are applied
