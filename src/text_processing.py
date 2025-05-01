@@ -128,53 +128,56 @@ class TextProcessor:
             # Preprocess image
             processed_image = self.preprocess_image(image)
 
-            # Use EasyOCR for text detection
-            try:
-                results = self.easyocr_reader.readtext(processed_image, detail=0)
-                if results:
-                    text = '\n'.join(results)
-                    self.last_frame_hash = current_hash
-                    self.last_processed_text = text
-                    return text
-            except Exception as e:
-                logger.warning(f"EasyOCR failed: {str(e)}. Falling back to Cloud Vision API.")
-
-            # Use Cloud Vision API if EasyOCR failed
-            if not self.vision_client:
-                return ""
-
-            # Prepare image for API
-            _, encoded_image = cv2.imencode('.png', processed_image)
-            content = encoded_image.tobytes()
-            vision_image = vision.Image(content=content)
-
-            # Make API call with retry logic
-            for attempt in range(self.max_retries):
+            if self.use_local_ocr:
+                # Use EasyOCR for text detection
                 try:
-                    response = self.vision_client.text_detection(image=vision_image)
-                    texts = response.text_annotations
-                    
-                    if response.error.message:
-                        raise Exception(response.error.message)
-                    
-                    if texts:
-                        lines = texts[0].description.split('\n')
-                        if len(lines) > 0:
-                            lines[0] = lines[0] + ':'
-                            result = '\n'.join(lines)
-                            self.last_frame_hash = current_hash
-                            self.last_processed_text = result
-                            self.increment_vision_api_calls()
-                            return result
-                    
-                    self.last_frame_hash = current_hash
-                    self.last_processed_text = ""
-                    return ""
-                    
+                    results = self.easyocr_reader.readtext(processed_image, detail=0)
+                    if results:
+                        text = '\n'.join(results)
+                        self.last_frame_hash = current_hash
+                        self.last_processed_text = text
+                        return text
                 except Exception as e:
-                    if attempt == self.max_retries - 1:
-                        raise
-                    time.sleep(self.backoff_factor ** attempt)
+                    logger.warning(f"EasyOCR failed: {str(e)}")
+                    return ""
+            else:
+                # Use Cloud Vision API directly
+                if not self.vision_client:
+                    logger.warning("Cloud Vision API client not available")
+                    return ""
+
+                # Prepare image for API
+                _, encoded_image = cv2.imencode('.png', processed_image)
+                content = encoded_image.tobytes()
+                vision_image = vision.Image(content=content)
+
+                # Make API call with retry logic
+                for attempt in range(self.max_retries):
+                    try:
+                        response = self.vision_client.text_detection(image=vision_image)
+                        texts = response.text_annotations
+                        
+                        if response.error.message:
+                            raise Exception(response.error.message)
+                        
+                        if texts:
+                            lines = texts[0].description.split('\n')
+                            if len(lines) > 0:
+                                lines[0] = lines[0] + ':'
+                                result = '\n'.join(lines)
+                                self.last_frame_hash = current_hash
+                                self.last_processed_text = result
+                                self.increment_vision_api_calls()
+                                return result
+                        
+                        self.last_frame_hash = current_hash
+                        self.last_processed_text = ""
+                        return ""
+                        
+                    except Exception as e:
+                        if attempt == self.max_retries - 1:
+                            raise
+                        time.sleep(self.backoff_factor ** attempt)
                     
         except Exception as e:
             logger.error(f"Text detection error: {str(e)}", exc_info=True)
