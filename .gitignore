@@ -1,0 +1,12 @@
+translation_history.txt
+region_config.json
+build/
+dist/
+installer/
+translation_history.json
+src/__pycache__/
+src/ui/__pycache__/
+__pycache__/
+trans.log
+.idea/
+config/
