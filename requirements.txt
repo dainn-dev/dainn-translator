@@ -1,3 +1,4 @@
+python>=3.10
 pyautogui==0.9.54
 opencv-python==4.8.0.76
 numpy>=1.24.0
@@ -7,4 +8,5 @@ pillow>=10.0.0
 screeninfo==0.8.1
 easyocr>=1.7.1
 torch>=2.0.0
-torchvision>=0.15.0 
+torchvision>=0.15.0
+customtkinter>=5.2.0

@@ -12,58 +12,101 @@ A real-time screen translation application that can detect and translate text fr
 
 ## Installation
 
-### Prerequisites
+### 1. Prerequisites
 
-- Python 3.7 or higher
+#### Python Installation
+
+1. Download and install Python 3.11.0 from the official website:
+   - Visit https://www.python.org/downloads/
+   - Download Python 3.11.0 installer
+   - During installation, make sure to check "Add Python to PATH"
+   - Also check "Install launcher for all users"
+
+2. Verify Python installation:
+   ```bash
+   python --version
+   ```
+   If Python is not found, try:
+   ```bash
+   py --version
+   ```
+
+#### Additional Requirements
+
 - Google Cloud Vision API credentials
 - Google Cloud Translation API credentials
 
-### Optional: Tesseract OCR Installation
+### 2. Set up Google Cloud Credentials
 
-The application can use Tesseract OCR for local text detection pre-filtering. This is optional but recommended for better performance.
+1. Create a Google Cloud project if you don't have one
+2. Enable the following APIs:
+   - Cloud Vision API
+   - Cloud Translation API
+3. Create a service account and download the JSON key file
+4. Set the environment variable:
+   ```bash
+   set GOOGLE_APPLICATION_CREDENTIALS="path/to/your/credentials.json"
+   ```
 
-#### Windows Installation
+### 3. Install Dependencies
 
-1. Download the Tesseract installer from [UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki)
-2. Run the installer and follow the installation wizard
-3. Add Tesseract to your system PATH:
-   - Open System Properties > Advanced > Environment Variables
-   - Under System Variables, find and select "Path"
-   - Click Edit > New
-   - Add the Tesseract installation path (typically `C:\Program Files\Tesseract-OCR`)
-4. Restart your terminal/IDE
+1. Create a virtual environment:
+   ```bash
+   python -m venv venv
+   .\venv\Scripts\activate  # On Windows
+   ```
 
-#### macOS Installation
+2. Install required packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-```bash
-brew install tesseract
-```
+### 4. Optional: Install EasyOCR
 
-#### Linux Installation
+The application uses EasyOCR for local text detection pre-filtering. This is optional but recommended for better performance.
 
-```bash
-sudo apt-get update
-sudo apt-get install tesseract-ocr
-```
+#### Installation
 
-### Python Dependencies
+EasyOCR is installed automatically with the other dependencies (see "Install Dependencies" section above). No additional installation is required.
 
-Install the required Python packages:
+#### Supported Languages
 
-```bash
-pip install -r requirements.txt
-```
+EasyOCR supports multiple languages including:
+- English
+- Chinese
+- Japanese
+- Korean
+- French
+- German
+- Spanish
+- And many more...
+
+The application will automatically use EasyOCR for text detection when available.
 
 ## Usage
 
-1. Set up your Google Cloud credentials
+1. Ensure your virtual environment is activated:
+   ```bash
+   .\venv\Scripts\activate  # On Windows
+   ```
+
 2. Run the application:
    ```bash
    python main.py
    ```
-3. Select a region of your screen to translate
-4. Choose your target language
-5. The translation will appear in real-time
+
+3. Application Interface:
+   - Click and drag to select a region of your screen
+   - Use the dropdown menu to select your target language
+   - Adjust settings through the settings menu (gear icon)
+   - Use the "Exit" button or press Ctrl+C in the terminal to quit
+
+4. Features:
+   - Real-time text detection and translation
+   - Customizable translation regions
+   - Multiple language support
+   - Adjustable UI settings
+   - Optional local OCR pre-filtering (if Tesseract is installed)
 
 ## Configuration
 
@@ -75,12 +118,12 @@ The application can be configured through the settings menu:
 
 ## Troubleshooting
 
-### Tesseract OCR Issues
+### EasyOCR Issues
 
-If you see a warning about Tesseract not being installed:
-1. Verify that Tesseract is installed correctly
-2. Check that Tesseract is in your system PATH
-3. Restart the application after installation
+If you see any issues with text detection:
+1. Ensure all dependencies are installed correctly
+2. Check if your GPU is being utilized (if available)
+3. Try adjusting the text detection settings in the application's configuration menu
 
 ### API Quota Issues
 
