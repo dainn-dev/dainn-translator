@@ -1,5 +1,5 @@
 #define MyAppName "Dainn Screen Translator"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "Dainn"
 #define MyAppURL "https://github.com/dainn/trans"
 #define MyAppExeName "DainnScreenTranslator.exe"
@@ -20,10 +20,16 @@ DisableProgramGroupPage=yes
 ; Uncomment the following line to run in administrative install mode (install for all users.)
 ;PrivilegesRequired=admin
 OutputDir=installer
-OutputBaseFilename=DainnScreenTranslator_Setup_v1.0.0
+OutputBaseFilename=DainnScreenTranslator_Setup_v{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+VersionInfoVersion={#MyAppVersion}
+VersionInfoCompany={#MyAppPublisher}
+VersionInfoDescription={#MyAppName}
+VersionInfoCopyright=Copyright (C) 2024 {#MyAppPublisher}
+VersionInfoProductName={#MyAppName}
+VersionInfoProductVersion={#MyAppVersion}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -32,7 +38,6 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "config\config.ini"; DestDir: "{app}\config"; Flags: ignoreversion
 Source: "resources\logo.ico"; DestDir: "{app}\resources"; Flags: ignoreversion

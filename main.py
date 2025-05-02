@@ -8,12 +8,22 @@ from src.ui.utils import validate_credentials
 from src.config_manager import ConfigManager
 
 # Configure logging
+import os
+import pathlib
+
+# Create logs directory in AppData if it doesn't exist
+appdata_path = os.path.join(os.getenv('APPDATA'), 'DainnScreenTranslator')
+logs_path = os.path.join(appdata_path, 'logs')
+os.makedirs(logs_path, exist_ok=True)
+
+log_file = os.path.join(logs_path, 'trans.log')
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('trans.log', mode='w')  # Changed to 'w' mode to clear previous logs
+        logging.FileHandler(log_file, mode='w')
     ]
 )
 

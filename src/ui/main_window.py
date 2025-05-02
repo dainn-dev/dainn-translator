@@ -64,16 +64,14 @@ class MainWindow(QMainWindow):
         if self.text_processor:
             if self.text_processor.use_local_ocr:
                 # Tesseract is available, enable and check the checkbox
-                self.use_tesseract_checkbox.setEnabled(True)
-                self.use_tesseract_checkbox.setChecked(True)
-                self.config_manager.set_global_setting('use_tesseract', 'true')
-                self.tesseract_warning.hide()
+                self.use_local_ocr_checkbox.setEnabled(True)
+                self.use_local_ocr_checkbox.setChecked(True)
+                self.config_manager.set_global_setting('use_local_ocr', 'true')
             else:
                 # Tesseract is not available, disable and uncheck the checkbox
-                self.use_tesseract_checkbox.setEnabled(False)
-                self.use_tesseract_checkbox.setChecked(False)
-                self.config_manager.set_global_setting('use_tesseract', 'false')
-                self.tesseract_warning.show()
+                self.use_local_ocr_checkbox.setEnabled(False)
+                self.use_local_ocr_checkbox.setChecked(False)
+                self.config_manager.set_global_setting('use_local_ocr', 'false')
 
         # Check for updates after a short delay to ensure the window is fully loaded
         QTimer.singleShot(2000, self.check_for_updates)
@@ -93,21 +91,13 @@ class MainWindow(QMainWindow):
         self.main_layout.addWidget(self.settings_group)
         self.settings_layout = QVBoxLayout(self.settings_group)
 
-        # Tesseract warning label
-        self.tesseract_warning = QLabel("⚠️ Tesseract OCR not found in C:/Program Files/Tesseract-OCR. Install Tesseract to reduce API calls.")
-        self.tesseract_warning.setStyleSheet(
-            "color: #FFA500; background-color: rgba(255, 165, 0, 0.1); padding: 8px; border-radius: 4px;"
-        )
-        self.tesseract_warning.setWordWrap(True)
-        self.tesseract_warning.hide()  # Initially hidden
-        self.settings_layout.addWidget(self.tesseract_warning)
-
         # Add OCR settings
         ocr_settings_layout = QHBoxLayout()
-        self.use_tesseract_checkbox = QCheckBox("Use Tesseract OCR")
-        self.use_tesseract_checkbox.setChecked(self.config_manager.get_global_setting('use_tesseract', 'true').lower() == 'true')
-        self.use_tesseract_checkbox.stateChanged.connect(self.on_ocr_setting_changed)
-        ocr_settings_layout.addWidget(self.use_tesseract_checkbox)
+        self.use_local_ocr_checkbox = QCheckBox("Use Local OCR (EasyOCR)")
+        self.use_local_ocr_checkbox.setChecked(True)
+        self.use_local_ocr_checkbox.setEnabled(True)
+        self.use_local_ocr_checkbox.stateChanged.connect(self.on_ocr_setting_changed)
+        ocr_settings_layout.addWidget(self.use_local_ocr_checkbox)
         self.settings_layout.addLayout(ocr_settings_layout)
 
         # Add Translator Settings panel
@@ -520,16 +510,28 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close event."""
-        for area_id in list(self.translation_windows.keys()):
-            if area_id in self.translation_windows:
-                window = self.translation_windows[area_id]
-                window.running = False
-                window.timer.stop()
-                window.close()
-                del self.translation_windows[area_id]
+        # Save window position
+        if self.config_manager:
+            self.config_manager.set_global_setting('main_window_pos', f"{self.x()},{self.y()}")
         
-        # Re-enable settings when all translation windows are closed
-        self.update_settings_state(enabled=True)  # Explicitly pass True
+        # Close all translation windows
+        for area_id in list(self.translation_windows.keys()):  # Create a copy of keys to avoid modification during iteration
+            try:
+                window = self.translation_windows.get(area_id)
+                if window and window.isVisible():
+                    window.close()
+                # Remove from dictionary regardless of whether it was closed or not
+                self.translation_windows.pop(area_id, None)
+            except Exception as e:
+                logger.error(f"Error closing translation window {area_id}: {str(e)}")
+                # Continue with other windows even if one fails
+                continue
+        
+        # Stop the translation timer
+        if hasattr(self, 'timer') and self.timer:
+            self.timer.stop()
+        
+        # Accept the close event
         event.accept()
 
     def update_button_states(self):
@@ -576,8 +578,8 @@ class MainWindow(QMainWindow):
                 self.browse_button.setEnabled(enabled)
             
             # OCR settings
-            if hasattr(self, 'use_tesseract_checkbox'):
-                self.use_tesseract_checkbox.setEnabled(enabled and self.text_processor and self.text_processor.use_local_ocr)
+            if hasattr(self, 'use_local_ocr_checkbox'):
+                self.use_local_ocr_checkbox.setEnabled(enabled and self.text_processor and self.text_processor.use_local_ocr)
 
             # Translation settings
             if hasattr(self, 'use_translate_api_checkbox'):
@@ -782,15 +784,15 @@ class MainWindow(QMainWindow):
 
     def on_ocr_setting_changed(self, state):
         """Handle OCR setting change."""
-        use_tesseract = state == Qt.Checked
-        self.config_manager.set_global_setting('use_tesseract', str(use_tesseract).lower())
+        use_local_ocr = state == Qt.Checked
+        self.config_manager.set_global_setting('use_local_ocr', str(use_local_ocr).lower())
         if self.text_processor:
-            self.text_processor.use_local_ocr = use_tesseract
+            self.text_processor.use_local_ocr = use_local_ocr
             # Update all active translation windows
             for window in self.translation_windows.values():
                 if window.isVisible():
-                    window.text_processor.use_local_ocr = use_tesseract
-            logger.info(f"OCR setting changed: use_tesseract={use_tesseract}")
+                    window.text_processor.use_local_ocr = use_local_ocr
+            logger.info(f"OCR setting changed: use_local_ocr={use_local_ocr}")
 
     def on_translate_api_setting_changed(self, state):
         """Handle translation API setting change."""

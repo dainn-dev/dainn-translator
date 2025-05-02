@@ -7,7 +7,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 import pyautogui
-import pytesseract
+import easyocr
 from google.cloud import vision
 from google.cloud import translate_v2 as translate
 from collections import OrderedDict
@@ -25,44 +25,6 @@ class TranslatorService(Enum):
     GOOGLE = "Google"
     DEEPL = "DeepL"
     YANDEX = "Yandex"
-
-# Configure Tesseract path based on operating system
-def get_tesseract_path():
-    system = platform.system().lower()
-    if system == 'windows':
-        paths = [
-            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe'
-        ]
-    elif system == 'darwin':  # macOS
-        paths = [
-            '/usr/local/bin/tesseract',
-            '/opt/homebrew/bin/tesseract',  # Homebrew on Apple Silicon
-            '/usr/bin/tesseract'
-        ]
-    else:  # Linux and others
-        paths = [
-            '/usr/bin/tesseract',
-            '/usr/local/bin/tesseract'
-        ]
-    
-    # Check each possible path
-    for path in paths:
-        if os.path.exists(path):
-            return path
-    
-    return None
-
-# Set Tesseract path
-TESSERACT_PATH = get_tesseract_path()
-if TESSERACT_PATH:
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
-    logging.info(f"Tesseract found at: {TESSERACT_PATH}")
-else:
-    logging.warning(
-        "Tesseract not found in common installation paths. "
-        "Please install Tesseract OCR and ensure it's in your PATH or set the correct path manually."
-    )
 
 logger = logging.getLogger(__name__)
 
@@ -95,76 +57,11 @@ class TextProcessor:
         self.text_cache = {}
         self.use_translate_api = self.config_manager.get_global_setting('use_translate_api', 'true').lower() == 'true'
         self.translator_service = TranslatorService(self.config_manager.get_global_setting('translator_service', 'Google'))
-        logger.info("Checking Tesseract OCR availability...")
-        self.use_local_ocr = self._check_tesseract_availability()
+        self.use_local_ocr = True  # Set this before initializing EasyOCR
+        self.easyocr_reader = None
+        logger.info("Initializing EasyOCR...")
+        self.initialize_easyocr()
         logger.info(f"TextProcessor initialization complete. Local OCR enabled: {self.use_local_ocr}, Translate API enabled: {self.use_translate_api}, Translator: {self.translator_service.value}")
-
-    def _check_tesseract_availability(self) -> bool:
-        """Check if Tesseract OCR is available."""
-        logger.info("Checking Tesseract OCR availability...")
-        
-        # Try multiple methods to check Tesseract
-        try:
-            # Method 1: Try to get version directly
-            try:
-                version = pytesseract.get_tesseract_version()
-                logger.info(f"Tesseract OCR is available (version: {version}) and will be used for pre-filtering")
-                return True
-            except Exception as e1:
-                logger.warning(f"Method 1 failed: {str(e1)}")
-                
-                # Method 2: Try to find tesseract executable
-                import shutil
-                tesseract_path = shutil.which('tesseract')
-                if tesseract_path:
-                    logger.info(f"Found Tesseract at: {tesseract_path}")
-                    # Try to get version using subprocess
-                    import subprocess
-                    try:
-                        result = subprocess.run(['tesseract', '--version'], 
-                                             capture_output=True, 
-                                             text=True, 
-                                             check=True)
-                        version = result.stdout.split('\n')[0]
-                        logger.info(f"Tesseract OCR is available (version: {version}) and will be used for pre-filtering")
-                        return True
-                    except subprocess.CalledProcessError as e2:
-                        logger.warning(f"Method 2 failed: {str(e2)}")
-                else:
-                    logger.warning("Tesseract executable not found in PATH")
-                
-                # Method 3: Try to set tesseract path explicitly
-                try:
-                    # Common installation paths
-                    possible_paths = [
-                        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-                        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
-                        r'/usr/bin/tesseract',
-                        r'/usr/local/bin/tesseract'
-                    ]
-                    
-                    for path in possible_paths:
-                        if os.path.exists(path):
-                            pytesseract.pytesseract.tesseract_cmd = path
-                            try:
-                                version = pytesseract.get_tesseract_version()
-                                logger.info(f"Tesseract OCR is available (version: {version}) at {path}")
-                                return True
-                            except Exception:
-                                continue
-                except Exception as e3:
-                    logger.warning(f"Method 3 failed: {str(e3)}")
-                
-                raise Exception("All methods to check Tesseract failed")
-                
-        except Exception as e:
-            logger.warning(
-                f"Tesseract OCR is not available. Error: {str(e)}. "
-                "Local OCR pre-filtering will be disabled. "
-                "To enable it, please ensure Tesseract OCR is installed and in your PATH. "
-                "See README.md for installation instructions."
-            )
-            return False
 
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """Preprocess image for better text detection."""
@@ -208,15 +105,12 @@ class TextProcessor:
         return sum(c1 == c2 for c1, c2 in zip(hash1, hash2)) / len(hash1)
 
     def local_ocr_check(self, image: np.ndarray) -> bool:
-        """Use Tesseract to check if image contains text."""
-        if not self.use_local_ocr:
-            return True  # Skip local OCR check if Tesseract is not available
-            
+        """Use EasyOCR to check if image contains text."""
         try:
-            text = pytesseract.image_to_string(image)
-            return bool(text.strip())
+            results = self.easyocr_reader.readtext(image, detail=0)
+            return bool(results)
         except Exception as e:
-            logger.warning(f"Local OCR check failed: {str(e)}")
+            logger.warning(f"EasyOCR check failed: {str(e)}")
             return True  # Return True to allow processing if OCR fails
 
     def detect_text(self, image: np.ndarray) -> str:
@@ -234,57 +128,56 @@ class TextProcessor:
             # Preprocess image
             processed_image = self.preprocess_image(image)
 
-            # Use Tesseract OCR only if enabled
             if self.use_local_ocr:
+                # Use EasyOCR for text detection
                 try:
-                    text = pytesseract.image_to_string(processed_image)
-                    if text.strip():
-                        lines = text.strip().split('\n')
-                        if len(lines) > 0:
-                            lines[0] = lines[0] + ':'
-                            result = '\n'.join(lines)
-                            self.last_frame_hash = current_hash
-                            self.last_processed_text = result
-                            return result
+                    results = self.easyocr_reader.readtext(processed_image, detail=0)
+                    if results:
+                        text = '\n'.join(results)
+                        self.last_frame_hash = current_hash
+                        self.last_processed_text = text
+                        return text
                 except Exception as e:
-                    logger.warning(f"Tesseract OCR failed: {str(e)}. Falling back to Cloud Vision API.")
-
-            # Use Cloud Vision API if Tesseract is disabled or failed
-            if not self.vision_client:
-                return ""
-
-            # Prepare image for API
-            _, encoded_image = cv2.imencode('.png', processed_image)
-            content = encoded_image.tobytes()
-            vision_image = vision.Image(content=content)
-
-            # Make API call with retry logic
-            for attempt in range(self.max_retries):
-                try:
-                    response = self.vision_client.text_detection(image=vision_image)
-                    texts = response.text_annotations
-                    
-                    if response.error.message:
-                        raise Exception(response.error.message)
-                    
-                    if texts:
-                        lines = texts[0].description.split('\n')
-                        if len(lines) > 0:
-                            lines[0] = lines[0] + ':'
-                            result = '\n'.join(lines)
-                            self.last_frame_hash = current_hash
-                            self.last_processed_text = result
-                            self.increment_vision_api_calls()  # Increment counter only when using Vision API
-                            return result
-                    
-                    self.last_frame_hash = current_hash
-                    self.last_processed_text = ""
+                    logger.warning(f"EasyOCR failed: {str(e)}")
                     return ""
-                    
-                except Exception as e:
-                    if attempt == self.max_retries - 1:
-                        raise
-                    time.sleep(self.backoff_factor ** attempt)
+            else:
+                # Use Cloud Vision API directly
+                if not self.vision_client:
+                    logger.warning("Cloud Vision API client not available")
+                    return ""
+
+                # Prepare image for API
+                _, encoded_image = cv2.imencode('.png', processed_image)
+                content = encoded_image.tobytes()
+                vision_image = vision.Image(content=content)
+
+                # Make API call with retry logic
+                for attempt in range(self.max_retries):
+                    try:
+                        response = self.vision_client.text_detection(image=vision_image)
+                        texts = response.text_annotations
+                        
+                        if response.error.message:
+                            raise Exception(response.error.message)
+                        
+                        if texts:
+                            lines = texts[0].description.split('\n')
+                            if len(lines) > 0:
+                                lines[0] = lines[0] + ':'
+                                result = '\n'.join(lines)
+                                self.last_frame_hash = current_hash
+                                self.last_processed_text = result
+                                self.increment_vision_api_calls()
+                                return result
+                        
+                        self.last_frame_hash = current_hash
+                        self.last_processed_text = ""
+                        return ""
+                        
+                    except Exception as e:
+                        if attempt == self.max_retries - 1:
+                            raise
+                        time.sleep(self.backoff_factor ** attempt)
                     
         except Exception as e:
             logger.error(f"Text detection error: {str(e)}", exc_info=True)
@@ -477,3 +370,14 @@ class TextProcessor:
     def increment_translation_api_calls(self) -> None:
         """Increment Translation API call count."""
         self.translation_api_calls_today += 1
+
+    def initialize_easyocr(self):
+        """Initialize EasyOCR reader."""
+        try:
+            # Initialize EasyOCR with supported languages
+            self.easyocr_reader = easyocr.Reader(['en'])  # Start with English only for testing
+            logger.info("EasyOCR initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize EasyOCR: {str(e)}")
+            self.easyocr_reader = None
+            self.use_local_ocr = False

@@ -126,11 +126,19 @@ class TranslationWindow(QMainWindow):
         self.frame_layout.setContentsMargins(0, 0, 0, 0)
         self.frame_layout.setSpacing(0)
 
-        # Request counter labels in top-left corner
-        self.request_counter_container = QWidget()
-        self.request_counter_layout = QHBoxLayout(self.request_counter_container)
-        self.request_counter_layout.setContentsMargins(4, 4, 4, 4)
-        self.request_counter_layout.setSpacing(8)
+        # Top bar container for labels
+        self.top_bar_container = QWidget()
+        self.top_bar_layout = QHBoxLayout(self.top_bar_container)
+        self.top_bar_layout.setContentsMargins(40, 8, 40, 8)  # Add margins for buttons
+        self.top_bar_layout.setSpacing(8)
+
+        # API labels container with fixed width
+        self.api_labels_container = QWidget()
+        self.api_labels_container.setFixedWidth(300)  # Set fixed width for the container
+        self.api_labels_layout = QHBoxLayout(self.api_labels_container)
+        self.api_labels_layout.setContentsMargins(0, 0, 0, 0)
+        self.api_labels_layout.setSpacing(8)
+        self.api_labels_layout.setAlignment(Qt.AlignLeft)  # Align labels to the left
 
         # Vision API counter
         self.vision_counter_label = QLabel("Vision API: 0 requests")
@@ -138,7 +146,8 @@ class TranslationWindow(QMainWindow):
             "color: rgba(255, 255, 255, 150); background-color: transparent; font-size: 10px; padding: 2px;"
         )
         self.vision_counter_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.request_counter_layout.addWidget(self.vision_counter_label)
+        self.vision_counter_label.setFixedWidth(120)  # Set fixed width for Vision API label
+        self.api_labels_layout.addWidget(self.vision_counter_label)
 
         # Translation API counter
         self.translation_counter_label = QLabel("Translation API: 0 requests")
@@ -146,15 +155,28 @@ class TranslationWindow(QMainWindow):
             "color: rgba(255, 255, 255, 150); background-color: transparent; font-size: 10px; padding: 2px;"
         )
         self.translation_counter_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.request_counter_layout.addWidget(self.translation_counter_label)
+        self.translation_counter_label.setFixedWidth(150)  # Set fixed width for Translation API label
+        self.api_labels_layout.addWidget(self.translation_counter_label)
 
-        # Add spacer to push labels to the left
-        self.request_counter_layout.addStretch()
+        # Add API labels container to top bar
+        self.top_bar_layout.addWidget(self.api_labels_container)
+        self.top_bar_layout.setAlignment(Qt.AlignLeft)  # Align the container to the left
 
-        self.frame_layout.addWidget(self.request_counter_container)
+        # Add top bar to frame layout
+        self.frame_layout.addWidget(self.top_bar_container)
 
-        # Close button in top-right corner
-        self.close_button = QPushButton("✕", self)  # Changed parent to self (main window)
+        # Capture button (fixed in top-left)
+        self.capture_button = QPushButton("▶", self)
+        self.capture_button.setFixedSize(24, 24)
+        self.capture_button.setStyleSheet(
+            f"QPushButton {{ background-color: rgba(255,255,255,40); color: #00ff00; border: 1px solid #00ff00; border-radius: 12px; }}"
+            f"QPushButton:hover {{ background-color: rgba(255,255,255,100); color: #ffffff; }}"
+        )
+        self.capture_button.clicked.connect(self.toggle_capture)
+        self.capture_button.raise_()
+
+        # Close button (fixed in top-right)
+        self.close_button = QPushButton("✕", self)
         self.close_button.setFixedSize(24, 24)
         self.close_button.setStyleSheet(
             f"QPushButton {{ background-color: rgba(255,255,255,40); color: #ff0000; border: 1px solid #ff0000; border-radius: 12px; }}"
@@ -166,12 +188,14 @@ class TranslationWindow(QMainWindow):
         # Content area with scroll
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(8, 8, 8, 8)
-        self.content_layout.setSpacing(4)
+        self.content_layout.setContentsMargins(4, 4, 4, 4)
+        self.content_layout.setSpacing(2)
+        self.content_layout.setAlignment(Qt.AlignTop)  # Align entire layout to top
 
         # Name label
         self.name_label = QLabel("")
         self.name_label.setWordWrap(True)
+        self.name_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         font = QFont(self.settings['font_family'], int(self.settings['font_size']))
         if self.settings['font_style'] == 'bold':
             font.setBold(True)
@@ -180,25 +204,29 @@ class TranslationWindow(QMainWindow):
         self.name_label.setFont(font)
         self.name_label.setStyleSheet(
             f"color: {self.settings['name_color']}; background-color: transparent;"
-            "padding: 8px;"
+            "padding: 2px;"
         )
         self.content_layout.addWidget(self.name_label)
 
         # Dialogue label
         self.dialogue_label = QLabel("")
         self.dialogue_label.setWordWrap(True)
+        self.dialogue_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.dialogue_label.setFont(font)
         self.dialogue_label.setStyleSheet(
             f"color: {self.settings['dialogue_color']}; background-color: transparent;"
-            "padding: 8px;"
+            "padding: 2px;"
         )
         self.content_layout.addWidget(self.dialogue_label)
+
+        # Add stretch to push any extra space to the bottom
+        self.content_layout.addStretch()
 
         # Add content widget to frame layout
         self.frame_layout.addWidget(self.content_widget)
 
-        # Resize button in bottom-right corner
-        self.resize_button = QPushButton("↘", self)  # Changed parent to self (main window)
+        # Resize button in bottom-right corner with padding
+        self.resize_button = QPushButton("↘", self)
         self.resize_button.setFixedSize(20, 20)
         self.resize_button.setStyleSheet(
             f"QPushButton {{ background-color: {rgba_str}; color: #00ff00; border: 1px solid #00ff00; border-radius: 10px; }}"
@@ -239,18 +267,24 @@ class TranslationWindow(QMainWindow):
         self.max_interval = 1000  # Maximum interval in milliseconds
         self.current_interval = self.min_interval
         self.consecutive_empty_frames = 0
+        self.is_capturing = False
 
     def position_buttons(self):
-        """Position close and resize buttons."""
-        margin = 6
-        # Close button in top-right
-        self.close_button.move(self.width() - self.close_button.width() - margin, margin)
-        # Resize button in bottom-right
-        self.resize_button.move(self.width() - self.resize_button.width() - margin,
-                               self.height() - self.resize_button.height() - margin)
+        """Position the buttons."""
+        # Position capture button in top-left corner with 15px margin
+        self.capture_button.move(15, 15)
+        
+        # Position close button in top-right corner
+        self.close_button.move(self.width() - self.close_button.width() - 15, 15)
+        
+        # Position resize button in bottom-right corner
+        self.resize_button.move(
+            self.width() - self.resize_button.width() - 15,
+            self.height() - self.resize_button.height() - 15
+        )
 
     def resizeEvent(self, event):
-        """Handle resize events."""
+        """Handle window resize events."""
         super().resizeEvent(event)
         self.position_buttons()
         # Update content width
@@ -265,7 +299,6 @@ class TranslationWindow(QMainWindow):
         # Update request counter when window is shown
         if self.text_processor:
             self.vision_counter_label.setText(f"Vision API: {self.text_processor.vision_api_calls_today} requests")
-            self.translation_counter_label.setText(f"Translation API: {self.text_processor.translation_api_calls_today} requests")
 
     def close_program(self):
         """Close the translation window."""
@@ -273,9 +306,29 @@ class TranslationWindow(QMainWindow):
         self.timer.stop()
         self.close()
 
+    def toggle_capture(self):
+        """Toggle the capture state."""
+        self.is_capturing = not self.is_capturing
+        if self.is_capturing:
+            self.capture_button.setText("⏸")
+            self.capture_button.setStyleSheet(
+                f"QPushButton {{ background-color: rgba(255,255,255,40); color: #ff0000; border: 1px solid #ff0000; border-radius: 12px; }}"
+                f"QPushButton:hover {{ background-color: rgba(255,255,255,100); color: #ffffff; }}"
+            )
+            self.running = True
+            self.timer.start(self.current_interval)
+        else:
+            self.capture_button.setText("▶")
+            self.capture_button.setStyleSheet(
+                f"QPushButton {{ background-color: rgba(255,255,255,40); color: #00ff00; border: 1px solid #00ff00; border-radius: 12px; }}"
+                f"QPushButton:hover {{ background-color: rgba(255,255,255,100); color: #ffffff; }}"
+            )
+            self.running = False
+            self.timer.stop()
+
     def continuous_translate(self):
         """Continuously translate screen region text with optimizations."""
-        if not self.running or not self.region or not self.text_processor or self.processing:
+        if not self.running or not self.region or not self.text_processor or self.processing or not self.is_capturing:
             return
 
         try:
@@ -457,12 +510,12 @@ class TranslationWindow(QMainWindow):
         self.name_label.setFont(font)
         self.name_label.setStyleSheet(
             f"color: {self.settings['name_color']}; background-color: transparent;"
-            "padding: 8px;"
+            "padding: 2px;"
         )
         self.dialogue_label.setFont(font)
         self.dialogue_label.setStyleSheet(
             f"color: {self.settings['dialogue_color']}; background-color: transparent;"
-            "padding: 8px;"
+            "padding: 2px;"
         )
         self.position_buttons()
         # Update request counter when settings are applied
@@ -510,6 +563,10 @@ class TranslationWindow(QMainWindow):
             self.is_dragging = True
             self.drag_start_pos = event.globalPos() - self.pos()
             self.setCursor(Qt.SizeAllCursor)
+            
+            # Stop capture when dragging starts
+            if self.is_capturing:
+                self.toggle_capture()
 
     def mouseMoveEvent(self, event):
         """Handle mouse move for dragging."""
@@ -539,6 +596,9 @@ class TranslationWindow(QMainWindow):
                 self.is_dragging = False
                 if self.config_manager and self.window_id:
                     self.config_manager.set_global_setting(f'window_{self.window_id}_pos', f"{self.x()},{self.y()}")
+                # Resume capture when dragging ends
+                if not self.is_capturing:
+                    self.toggle_capture()
             if self.is_resizing:
                 self.is_resizing = False
                 self.resize_timer.stop()
