@@ -134,6 +134,20 @@ class MainWindow(QMainWindow):
                 background-color: white;
                 color: #000000;
             }
+            QComboBox::down-arrow {
+                border: none;
+                width: 0;
+                height: 0;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid #000000;
+                margin-right: 3px;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+                background-color: white;
+            }
             QLineEdit {
                 border: 1px solid #E0E0E0;
                 border-radius: 6px;
@@ -921,8 +935,56 @@ class MainWindow(QMainWindow):
                 if window.isVisible():
                     window.text_processor.set_use_translate_api(use_api)
         
-        # Update translator combo state
+        # Update translator combo state and style
         self.translator_combo.setEnabled(not use_api)
+        if use_api:
+            self.translator_combo.setStyleSheet("""
+                QComboBox {
+                    border: 1px solid #E0E0E0;
+                    border-radius: 6px;
+                    padding: 5px;
+                    background-color: #f5f5f5;
+                    color: #999999;
+                }
+                QComboBox::down-arrow {
+                    border: none;
+                    width: 0;
+                    height: 0;
+                    border-left: 5px solid transparent;
+                    border-right: 5px solid transparent;
+                    border-top: 5px solid #999999;
+                    margin-right: 3px;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    width: 20px;
+                    background-color: #f5f5f5;
+                }
+            """)
+        else:
+            self.translator_combo.setStyleSheet("""
+                QComboBox {
+                    border: 1px solid #E0E0E0;
+                    border-radius: 6px;
+                    padding: 5px;
+                    background-color: white;
+                    color: #000000;
+                }
+                QComboBox::down-arrow {
+                    border: none;
+                    width: 0;
+                    height: 0;
+                    border-left: 5px solid transparent;
+                    border-right: 5px solid transparent;
+                    border-top: 5px solid #000000;
+                    margin-right: 3px;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    width: 20px;
+                    background-color: white;
+                }
+            """)
         
         logger.info(f"Translation API setting changed: use_api={use_api}")
 
