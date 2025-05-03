@@ -13,6 +13,11 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import OrderedDict
 import time
 import threading
+from src.screen_capture import capture_screen_region
+import platform
+import tempfile
+import subprocess
+import cv2
 
 logger = logging.getLogger(__name__)
 
@@ -337,8 +342,37 @@ class TranslationWindow(QMainWindow):
             
             # Capture screen in a separate thread
             def capture_screen():
-                screenshot = pyautogui.screenshot(region=(x, y, w, h))
-                return np.array(screenshot)
+                if platform.system() == 'Darwin':
+                    # On macOS, use screencapture command
+                    temp_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+                    temp_file.close()
+                    
+                    try:
+                        # Take a screenshot of the specific region
+                        result = subprocess.run([
+                            'screencapture', 
+                            '-R', f"{x},{y},{w},{h}",  # Capture specific region
+                            '-x',  # Don't play sound
+                            temp_file.name
+                        ], capture_output=True, text=True)
+                        
+                        if result.returncode != 0:
+                            raise Exception(f"Failed to capture screen: {result.stderr}")
+                        
+                        # Read the screenshot
+                        screenshot = cv2.imread(temp_file.name)
+                        if screenshot is None:
+                            raise Exception("Failed to read captured screenshot")
+                        
+                        return screenshot
+                    finally:
+                        if os.path.exists(temp_file.name):
+                            os.unlink(temp_file.name)
+                else:
+                    # For other platforms, use pyautogui
+                    import pyautogui
+                    screenshot = pyautogui.screenshot(region=(x, y, w, h))
+                    return cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
             
             # Use ThreadPoolExecutor for screen capture
             with ThreadPoolExecutor(max_workers=1) as executor:
@@ -453,34 +487,56 @@ class TranslationWindow(QMainWindow):
         self.region = region
         if region:
             x, y, w, h = region
+            
+            # Get all available screens
+            screens = QApplication.screens()
+            if not screens:
+                logger.error("No screens found")
+                return
+                
+            # Find the screen that contains the position
+            target_screen = None
+            for screen in screens:
+                screen_geometry = screen.geometry()
+                if screen_geometry.contains(QPoint(x, y)):
+                    target_screen = screen
+                    break
+            
+            # If no screen contains the position, use the primary screen
+            if not target_screen:
+                target_screen = QApplication.primaryScreen()
+                logger.warning(f"Position ({x}, {y}) not on any screen, using primary screen")
+            
+            # Get screen geometry
+            screen_geometry = target_screen.geometry()
+            
+            # Validate and adjust coordinates
+            x = max(screen_geometry.left(), min(x, screen_geometry.right() - w))
+            y = max(screen_geometry.top(), min(y, screen_geometry.bottom() - h))
+            
+            # Update region with validated coordinates
+            self.region = (x, y, w, h)
+            
+            # Restore saved position if available
             if self.config_manager and self.window_id:
                 saved_pos = self.config_manager.get_global_setting(f'window_{self.window_id}_pos')
                 if saved_pos:
                     try:
-                        x, y = map(int, saved_pos.split(','))
+                        saved_x, saved_y = map(int, saved_pos.split(','))
+                        # Validate saved position
+                        saved_x = max(screen_geometry.left(), min(saved_x, screen_geometry.right() - w))
+                        saved_y = max(screen_geometry.top(), min(saved_y, screen_geometry.bottom() - h))
+                        x, y = saved_x, saved_y
                     except ValueError:
                         pass
-            x, y = self.ensure_window_in_bounds(x, y, w, h)
+            
+            # Set window geometry
             self.setGeometry(x, y, w, h)
             self.name_label.setFixedWidth(w - 40)
             self.dialogue_label.setFixedWidth(w - 40)
-
-    def ensure_window_in_bounds(self, x: int, y: int, w: int, h: int) -> Tuple[int, int]:
-        """Ensure window stays within screen bounds."""
-        # Get all available screens
-        screens = QApplication.screens()
-        # Find the screen that contains the position
-        for screen in screens:
-            screen_geometry = screen.geometry()
-            if screen_geometry.contains(QPoint(x, y)):
-                x = max(screen_geometry.left(), min(x, screen_geometry.right() - w))
-                y = max(screen_geometry.top(), min(y, screen_geometry.bottom() - h))
-                return x, y
-        # If no screen contains the position, use the primary screen
-        screen = QApplication.primaryScreen().geometry()
-        x = max(0, min(x, screen.width() - w))
-        y = max(0, min(y, screen.height() - h))
-        return x, y
+            
+            # Log the final position
+            logger.info(f"Window positioned at ({x}, {y}) with size {w}x{h} on screen {target_screen.name()}")
 
     def apply_settings(self, settings: Dict):
         """Apply new settings to the window."""

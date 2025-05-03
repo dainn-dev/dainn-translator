@@ -69,14 +69,18 @@ class ConfigManager:
         self.save_config()
 
     def save_config(self) -> None:
-        """Save current configuration to file"""
+        """Save configuration to file"""
         try:
             logger.info(f"Saving config to {self.config_file}")
+            # Ensure config directory exists
+            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+            
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 self.config.write(f)
             logger.info("Config saved successfully")
         except Exception as e:
             logger.error(f"Error saving config: {str(e)}", exc_info=True)
+            raise
 
     def get_global_setting(self, key: str, default: str = '') -> str:
         """Get a global setting value"""

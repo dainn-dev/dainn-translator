@@ -33,14 +33,14 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning(f"Could not set window icon: {e}")
 
-        # Colors
-        self.bg_color = "#f5f5f5"
-        self.accent_color = "#2196F3"
-        self.secondary_color = "#1976D2"
-        self.text_color = "#212121"
-        self.button_bg = "#2196F3"
+        # Colors - macOS friendly
+        self.bg_color = "#ffffff"  # Pure white for macOS
+        self.accent_color = "#007AFF"  # macOS blue
+        self.secondary_color = "#0056B3"  # Darker blue for hover
+        self.text_color = "#000000"  # Black text
+        self.button_bg = "#007AFF"  # macOS blue
         self.button_fg = "white"
-        self.frame_bg = "#ffffff"
+        self.frame_bg = "#ffffff"  # Pure white for frames
 
         # Config manager
         self.config_manager = ConfigManager()
@@ -82,11 +82,116 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.main_layout = QHBoxLayout(self.central_widget)
         self.main_layout.setContentsMargins(20, 20, 20, 20)
+        self.main_layout.setSpacing(20)  # Add spacing between widgets
+
+        # Set main window background to white
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: white;
+            }
+            QWidget {
+                background-color: white;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            }
+            QLabel {
+                color: #000000;
+                font-size: 13px;
+                padding: 2px;
+            }
+            QGroupBox {
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 15px;
+                background-color: white;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 3px;
+                color: #000000;
+                font-size: 13px;
+            }
+            QPushButton {
+                background-color: #007AFF;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #0056B3;
+            }
+            QPushButton:disabled {
+                background-color: #E0E0E0;
+                color: #999999;
+            }
+            QComboBox {
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                padding: 5px;
+                background-color: white;
+                color: #000000;
+            }
+            QLineEdit {
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                padding: 5px;
+                background-color: white;
+                color: #000000;
+            }
+            QTreeWidget {
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                background-color: white;
+            }
+            QTreeWidget::item {
+                padding: 5px;
+                color: #000000;
+            }
+            QTreeWidget::item:selected {
+                background-color: #E0E0E0;
+                color: #000000;
+            }
+            QTreeWidget QHeaderView::section {
+                background-color: white;
+                color: #000000;
+                border: 1px solid #E0E0E0;
+                padding: 5px;
+                font-weight: bold;
+            }
+            QTreeWidget::item {
+                color: #000000;
+            }
+            QTreeWidget::item:selected {
+                background-color: #E0E0E0;
+                color: #000000;
+            }
+            QCheckBox {
+                color: #000000;
+                font-size: 13px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+            QCheckBox::indicator:unchecked {
+                border: 1px solid #E0E0E0;
+                background-color: white;
+                border-radius: 3px;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #007AFF;
+                border: 1px solid #007AFF;
+                border-radius: 3px;
+            }
+        """)
 
         # Settings panel
         self.settings_group = QGroupBox("Settings")
         self.settings_group.setStyleSheet(
-            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: {self.frame_bg}; }}"
+            f"QGroupBox {{ font: 13pt -apple-system; color: {self.text_color}; background-color: white; }}"
         )
         self.main_layout.addWidget(self.settings_group)
         self.settings_layout = QVBoxLayout(self.settings_group)
@@ -103,7 +208,7 @@ class MainWindow(QMainWindow):
         # Add Translator Settings panel
         self.translator_group = QGroupBox("Translator Settings")
         self.translator_group.setStyleSheet(
-            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: {self.frame_bg}; }}"
+            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: white; }}"
         )
         self.settings_layout.addWidget(self.translator_group)
         self.translator_layout = QVBoxLayout(self.translator_group)
@@ -267,7 +372,7 @@ class MainWindow(QMainWindow):
         # Translation areas panel
         self.areas_group = QGroupBox("Translation Areas")
         self.areas_group.setStyleSheet(
-            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: {self.frame_bg}; }}"
+            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: white; }}"
         )
         self.main_layout.addWidget(self.areas_group)
         self.areas_layout = QVBoxLayout(self.areas_group)
@@ -408,10 +513,15 @@ class MainWindow(QMainWindow):
         """Save area configuration."""
         try:
             logger.info(f"Saving area {area_id} configuration...")
+            # Ensure config directory exists
+            config_dir = os.path.dirname(self.config_manager.config_file)
+            os.makedirs(config_dir, exist_ok=True)
+            
             self.config_manager.save_area(area_id, x, y, w, h)
             logger.info(f"Area {area_id} configuration saved successfully")
         except Exception as e:
             logger.error(f"Error saving area config: {str(e)}", exc_info=True)
+            show_error_message(self, "Error", f"Failed to save area configuration: {str(e)}")
 
     def remove_area_from_config(self, area_id):
         """Remove area configuration."""

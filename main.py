@@ -11,8 +11,9 @@ from src.config_manager import ConfigManager
 import os
 import pathlib
 
-# Create logs directory in AppData if it doesn't exist
-appdata_path = os.path.join(os.getenv('APPDATA'), 'DainnScreenTranslator')
+# Create logs directory in user's home directory if it doesn't exist
+home_path = os.path.expanduser("~")
+appdata_path = os.path.join(home_path, '.dainn-translator')
 logs_path = os.path.join(appdata_path, 'logs')
 os.makedirs(logs_path, exist_ok=True)
 
