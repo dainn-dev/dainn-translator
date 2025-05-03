@@ -247,27 +247,43 @@ class MainWindow(QMainWindow):
         self.translator_layout.addLayout(translator_selection_layout)
 
         # Add warning labels
-        self.credentials_warning = QLabel("⚠️ Invalid Google Cloud credentials. Web-based translation will be used.")
-        self.credentials_warning.setStyleSheet(
-            "color: #FFA500; background-color: rgba(255, 165, 0, 0.1); padding: 8px; border-radius: 4px;"
-        )
+        self.credentials_warning = QLabel("Invalid Google Cloud credentials. Web-based translation will be used.")
+        self.credentials_warning.setStyleSheet("""
+            QLabel {
+                color: #666666;
+                background-color: #FFF8E1;
+                padding: 12px;
+                border-radius: 6px;
+                border: 1px solid #FFE0B2;
+                margin: 5px 0;
+                font-size: 15px;
+            }
+        """)
         self.credentials_warning.setWordWrap(True)
         self.credentials_warning.hide()
         self.translator_layout.addWidget(self.credentials_warning)
 
-        self.translator_warning = QLabel("⚠️ Selected translator is not supported for the current language pair.")
-        self.translator_warning.setStyleSheet(
-            "color: #FFA500; background-color: rgba(255, 165, 0, 0.1); padding: 8px; border-radius: 4px;"
-        )
+        self.translator_warning = QLabel("Selected translator is not supported for the current language pair.")
+        self.translator_warning.setStyleSheet("""
+            QLabel {
+                color: #666666;
+                background-color: #FFF8E1;
+                padding: 12px;
+                border-radius: 6px;
+                border: 1px solid #FFE0B2;
+                margin: 5px 0;
+                font-size: 15px;
+            }
+        """)
         self.translator_warning.setWordWrap(True)
         self.translator_warning.hide()
         self.translator_layout.addWidget(self.translator_warning)
 
-        # Add a separator
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        self.settings_layout.addWidget(separator)
+        # # Add a separator
+        # separator = QFrame()
+        # separator.setFrameShape(QFrame.HLine)
+        # separator.setFrameShadow(QFrame.Sunken)
+        # self.settings_layout.addWidget(separator)
 
         # Font settings
         self.font_group = QGroupBox("Font Settings")
@@ -923,10 +939,18 @@ class MainWindow(QMainWindow):
         use_api = state == Qt.Checked
         if use_api and not self.validate_credentials():
             self.use_translate_api_checkbox.setChecked(False)
-            self.credentials_warning.show()
+            QMessageBox.warning(
+                self,
+                "Invalid Credentials",
+                "Google Cloud credentials are missing or invalid.\n\n"
+                "To use the Google Translate API, please:\n"
+                "1. Create a Google Cloud account at https://console.cloud.google.com/\n"
+                "2. Enable the Cloud Translation API for your project\n"
+                "3. Create and download a service account key (JSON file)\n"
+                "4. Set the credentials file path in the application settings."
+            )
             return
 
-        self.credentials_warning.hide()
         self.config_manager.set_global_setting('use_translate_api', str(use_api).lower())
         if self.text_processor:
             self.text_processor.set_use_translate_api(use_api)
@@ -1016,7 +1040,6 @@ class MainWindow(QMainWindow):
             logger.info(f"Translator changed to: {translator}")
         except Exception as e:
             logger.error(f"Error changing translator: {str(e)}")
-            self.translator_warning.show()
 
     def check_translator_support(self):
         """Check if the selected translator supports the current language pair."""
@@ -1050,12 +1073,10 @@ class MainWindow(QMainWindow):
             else:
                 is_supported = supported_pairs[translator]
 
-            self.translator_warning.setVisible(not is_supported)
             return is_supported
 
         except Exception as e:
             logger.error(f"Error checking translator support: {str(e)}")
-            self.translator_warning.show()
             return False
 
     def check_for_updates(self):
