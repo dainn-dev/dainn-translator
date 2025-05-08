@@ -54,15 +54,15 @@ def main():
 
         logger.info("Initializing Google Cloud clients...")
         # Initialize Google Cloud clients
-        from google.cloud import vision
         from google.cloud import translate_v2 as translate
+        from google.cloud import vision
 
-        vision_client = vision.ImageAnnotatorClient()
         translate_client = translate.Client()
+        vision_client = vision.ImageAnnotatorClient()
         logger.info("Google Cloud clients initialized successfully")
 
         logger.info("Creating TextProcessor...")
-        text_processor = TextProcessor(vision_client, translate_client)
+        text_processor = TextProcessor(translate_client, vision_client)
         logger.info("TextProcessor created successfully")
 
         logger.info("Creating MainWindow...")
