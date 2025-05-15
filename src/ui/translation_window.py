@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class TranslationCache:
     """Cache for translations to avoid redundant API calls."""
     
-    def __init__(self, max_size: int = 1000):
+    def __init__(self, max_size: int = 5000):
         self.cache = OrderedDict()
         self.max_size = max_size
         self.lock = threading.Lock()

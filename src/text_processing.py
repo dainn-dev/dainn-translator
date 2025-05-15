@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class TextProcessor:
     """Handle text translation and history logging."""
     
-    def __init__(self, translate_client: Optional[translate.Client], vision_client: Optional[vision.ImageAnnotatorClient] = None, cache_size: int = 1000):
+    def __init__(self, translate_client: Optional[translate.Client], vision_client: Optional[vision.ImageAnnotatorClient] = None, cache_size: int = 5000):
         logger.info("Initializing TextProcessor...")
         self.translate_client = translate_client
         self.vision_client = vision_client
