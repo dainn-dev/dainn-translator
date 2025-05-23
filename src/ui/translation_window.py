@@ -1,7 +1,7 @@
 import html
 import pyautogui
 import numpy as np
-from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QPushButton, QLabel, QApplication, QHBoxLayout
+from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QPushButton, QLabel, QApplication, QHBoxLayout, QCheckBox, QComboBox
 from PyQt5.QtCore import Qt, QTimer, QPoint
 from PyQt5.QtGui import QFont, QColor, QCursor
 from src.config_manager import ConfigManager
@@ -149,10 +149,19 @@ class TranslationWindow(QMainWindow):
         self.vision_counter_label.setFixedWidth(120)  # Set fixed width for Vision API label
         self.api_labels_layout.addWidget(self.vision_counter_label)
 
+        # Speech API counter
+        self.speech_counter_label = QLabel("Speech API: 0 requests")
+        self.speech_counter_label.setStyleSheet(
+            "color: rgba(255, 255, 255, 150); background-color: transparent; font-size: 10px; padding: 2px;"
+        )
+        self.speech_counter_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.speech_counter_label.setFixedWidth(120)  # Set fixed width for Speech API label
+        self.api_labels_layout.addWidget(self.speech_counter_label)
+
         # Translation API counter
         self.translation_counter_label = QLabel("Translation API: 0 requests")
         self.translation_counter_label.setStyleSheet(
-            "color: rgba(255, 255, 255, 150); background-color: transparent; font-size: 10px; padding: 2px;"
+            "color: rgba(255, 255, 255, 150); background-color: transparent; font-size: 10px; margin-left: 10px; margin-right: 10px; padding: 2px;"
         )
         self.translation_counter_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.translation_counter_label.setFixedWidth(150)  # Set fixed width for Translation API label
@@ -161,6 +170,23 @@ class TranslationWindow(QMainWindow):
         # Add API labels container to top bar
         self.top_bar_layout.addWidget(self.api_labels_container)
         self.top_bar_layout.setAlignment(Qt.AlignLeft)  # Align the container to the left
+
+        # Speech To Text checkbox
+        self.speech_to_text_checkbox = QCheckBox("Speech To Text")
+        self.speech_to_text_checkbox.setStyleSheet(
+            "color: rgba(255, 255, 255, 150); background-color: transparent; font-size: 10px; margin-left: 20px; padding: 2px;"
+        )
+        self.speech_to_text_checkbox.stateChanged.connect(self.toggle_speech_to_text)
+        self.top_bar_layout.addWidget(self.speech_to_text_checkbox)
+
+        # Add device selection dropdown
+        self.device_combo = QComboBox()
+        self.device_combo.setStyleSheet(
+            "color: rgba(255, 255, 255, 150); background-color: transparent; font-size: 10px; margin-left: 20px; padding: 2px;"
+        )
+        self.update_device_list()
+        self.device_combo.currentIndexChanged.connect(self.on_device_changed)
+        self.top_bar_layout.addWidget(self.device_combo)
 
         # Add top bar to frame layout
         self.frame_layout.addWidget(self.top_bar_container)
@@ -268,6 +294,7 @@ class TranslationWindow(QMainWindow):
         self.current_interval = self.min_interval
         self.consecutive_empty_frames = 0
         self.is_capturing = False
+        self.use_speech_to_text = False  # Add state variable for Speech To Text
 
     def position_buttons(self):
         """Position the buttons."""
@@ -317,6 +344,10 @@ class TranslationWindow(QMainWindow):
             )
             self.running = True
             self.timer.start(self.current_interval)
+            # Start recording if speech-to-text is enabled
+            if self.use_speech_to_text:
+                self.text_processor.start_recording()
+                self.update_text("Listening to system audio... (Play some sound)")
         else:
             self.capture_button.setText("▶")
             self.capture_button.setStyleSheet(
@@ -325,6 +356,13 @@ class TranslationWindow(QMainWindow):
             )
             self.running = False
             self.timer.stop()
+            # Stop recording and process if speech-to-text is enabled
+            if self.use_speech_to_text:
+                text = self.text_processor.stop_recording()
+                if text:
+                    self.process_text(text)
+                else:
+                    self.update_text("No audio detected. Make sure Stereo Mix is enabled in Windows sound settings.")
 
     def continuous_translate(self):
         """Continuously translate screen region text with optimizations."""
@@ -334,6 +372,15 @@ class TranslationWindow(QMainWindow):
         try:
             self.processing = True
             x, y, w, h = self.region
+            
+            # Handle speech-to-text
+            if self.use_speech_to_text:
+                text = self.text_processor.stop_recording()
+                if text:
+                    self.last_text = text
+                    self.process_text(text)
+                self.processing = False
+                return
             
             # Capture screen in a separate thread
             def capture_screen():
@@ -348,9 +395,12 @@ class TranslationWindow(QMainWindow):
             # Process the frame
             text = self.text_processor.detect_text(screenshot)
             
-            # Update Vision API counter
-            if text and not self.text_processor.use_local_ocr:
-                self.vision_counter_label.setText(f"Vision API: {self.text_processor.vision_api_calls_today} requests")
+            # Update API counters
+            if text:
+                if self.use_speech_to_text:
+                    self.speech_counter_label.setText(f"Speech API: {self.text_processor.speech_api_calls_today} requests")
+                else:
+                    self.vision_counter_label.setText(f"Vision API: {self.text_processor.vision_api_calls_today} requests")
             
             # Skip if text is unchanged
             if text == self.last_text:
@@ -625,3 +675,90 @@ class TranslationWindow(QMainWindow):
                 self.is_resizing = False
                 self.resize_timer.stop()
             self.setCursor(Qt.ArrowCursor)
+
+    def toggle_speech_to_text(self, state):
+        """Toggle between Speech To Text and Vision API."""
+        self.use_speech_to_text = state == Qt.Checked
+        if self.text_processor:
+            self.text_processor.use_speech_to_text = self.use_speech_to_text
+
+        # Start or stop recording immediately when toggled
+        if self.use_speech_to_text and self.is_capturing:
+            self.text_processor.start_recording()
+            self.update_text("Listening to system audio... (Play some sound)")
+        elif not self.use_speech_to_text and self.is_capturing:
+            text = self.text_processor.stop_recording()
+            if text:
+                self.process_text(text)
+            else:
+                self.update_text("No audio detected. Make sure Stereo Mix is enabled in Windows sound settings.")
+
+    def process_text(self, text: str):
+        """Process text (from Vision or Speech) and update the UI."""
+        if not text:
+            self.update_text("")
+            return
+
+        # Check cache first
+        cached_translation = self.translation_cache.get(
+            text,
+            self.settings['source_language'],
+            self.settings['target_language']
+        )
+        if cached_translation:
+            self.update_text(cached_translation)
+            self.last_text = text
+            self.last_translated_text = cached_translation
+            return
+
+        # Check rate limit before making API call
+        if not self.rate_limiter.can_make_request():
+            logger.warning("Rate limit reached, skipping translation")
+            self.update_text(self.last_translated_text)
+            return
+
+        def translate_text():
+            self.rate_limiter.add_request()
+            translated = self.text_processor.translate_text(
+                text,
+                self.settings['target_language'],
+                self.settings['source_language']
+            )
+            self.translation_counter_label.setText(f"Translation API: {self.text_processor.translation_api_calls_today} requests")
+            return translated
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(translate_text)
+            translated_text = future.result()
+
+        self.translation_cache.put(
+            text,
+            self.settings['source_language'],
+            self.settings['target_language'],
+            translated_text
+        )
+        self.update_text(translated_text)
+        self.last_text = text
+        self.last_translated_text = translated_text
+
+    def update_device_list(self):
+        """Update the device selection dropdown with available devices."""
+        if self.text_processor:
+            self.device_combo.clear()
+            for index, name in self.text_processor.available_devices:
+                self.device_combo.addItem(name, index)
+            
+            # Select Stereo Mix if available
+            stereo_mix_index = self.text_processor._find_stereo_mix()
+            if stereo_mix_index is not None:
+                for i in range(self.device_combo.count()):
+                    if self.device_combo.itemData(i) == stereo_mix_index:
+                        self.device_combo.setCurrentIndex(i)
+                        break
+
+    def on_device_changed(self, index):
+        """Handle device selection change."""
+        if self.text_processor and index >= 0:
+            device_index = self.device_combo.itemData(index)
+            self.text_processor.selected_device_index = device_index
+            logger.info(f"Selected audio device: {self.device_combo.currentText()} (index: {device_index})")
