@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class TranslationCache:
     """Cache for translations to avoid redundant API calls."""
     
-    def __init__(self, max_size: int = 5000):
+    def __init__(self, max_size: int = 1000000):
         self.cache = OrderedDict()
         self.max_size = max_size
         self.lock = threading.Lock()
@@ -544,9 +544,31 @@ class TranslationWindow(QMainWindow):
         height_diff = current_pos.y() - self.resize_start_pos.y()
         new_width = max(self.min_width, self.resize_start_size.width() + width_diff)
         new_height = max(self.min_height, self.resize_start_size.height() + height_diff)
-        screen = QApplication.primaryScreen().geometry()
-        new_width = min(new_width, screen.width() - self.x())
-        new_height = min(new_height, screen.height() - self.y())
+        
+        # Get all available screens
+        screens = QApplication.screens()
+        # Find the screen that contains the current position
+        current_screen = None
+        for screen in screens:
+            if screen.geometry().contains(current_pos):
+                current_screen = screen
+                break
+        
+        # If no screen contains the position, use the screen that contains the window
+        if not current_screen:
+            for screen in screens:
+                if screen.geometry().contains(self.pos()):
+                    current_screen = screen
+                    break
+        
+        # If still no screen found, use primary screen
+        if not current_screen:
+            current_screen = QApplication.primaryScreen()
+        
+        screen_geometry = current_screen.geometry()
+        new_width = min(new_width, screen_geometry.width() - (self.x() - screen_geometry.x()))
+        new_height = min(new_height, screen_geometry.height() - (self.y() - screen_geometry.y()))
+        
         self.resize(new_width, new_height)
         content_width = new_width - 40
         self.name_label.setFixedWidth(content_width)
