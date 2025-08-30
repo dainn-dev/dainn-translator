@@ -405,9 +405,9 @@ class MainWindow(QMainWindow):
             translation_window.timer.start(1000)
             self.translation_windows[area_id] = translation_window
             
-            # Connect the closeEvent of the translation window
+            # Connect the close handler to the translation window
             translation_window.area_id = area_id  # Store area_id for reference
-            translation_window.closeEvent = self.handle_translation_window_close_wrapper
+            translation_window.main_window_close_handler = self.handle_translation_window_close_direct
             
             translation_window.show()
             
@@ -422,20 +422,27 @@ class MainWindow(QMainWindow):
     def handle_translation_window_close_wrapper(self, event):
         """Wrapper for handling translation window close events."""
         try:
+            logger.info("handle_translation_window_close_wrapper called")
             # Get the sender (the window that's closing)
             sender = self.sender()
+            logger.info(f"Sender: {sender}")
             if sender and hasattr(sender, 'area_id'):
                 area_id = sender.area_id
+                logger.info(f"Found area_id: {area_id}")
                 self.handle_translation_window_close(event, area_id)
             else:
+                logger.warning("No sender or area_id found")
                 event.accept()
         except Exception as e:
             logger.error(f"Error in close wrapper: {str(e)}", exc_info=True)
             event.accept()
 
-    def handle_translation_window_close(self, event, area_id):
-        """Handle the closure of a translation window."""
+    def handle_translation_window_close_direct(self, area_id):
+        """Handle the closure of a translation window directly (called from close button)."""
         try:
+            logger.info(f"handle_translation_window_close_direct called for area_id: {area_id}")
+            logger.info(f"Translation windows before removal: {list(self.translation_windows.keys())}")
+            
             if area_id in self.translation_windows:
                 window = self.translation_windows[area_id]
                 if hasattr(window, 'running'):
@@ -443,10 +450,43 @@ class MainWindow(QMainWindow):
                 if hasattr(window, 'timer') and window.timer:
                     window.timer.stop()
                 del self.translation_windows[area_id]
+                logger.info(f"Removed translation window for area_id: {area_id}")
+            
+            logger.info(f"Translation windows after removal: {list(self.translation_windows.keys())}")
             
             # If no more translation windows are open, re-enable settings
             if not self.translation_windows:
+                logger.info("No more translation windows, re-enabling settings")
                 self.update_settings_state(enabled=True)  # Explicitly pass True
+            else:
+                logger.info(f"Still have {len(self.translation_windows)} translation windows open")
+            
+        except Exception as e:
+            logger.error(f"Error handling translation window close: {str(e)}", exc_info=True)
+
+    def handle_translation_window_close(self, event, area_id):
+        """Handle the closure of a translation window."""
+        try:
+            logger.info(f"handle_translation_window_close called for area_id: {area_id}")
+            logger.info(f"Translation windows before removal: {list(self.translation_windows.keys())}")
+            
+            if area_id in self.translation_windows:
+                window = self.translation_windows[area_id]
+                if hasattr(window, 'running'):
+                    window.running = False
+                if hasattr(window, 'timer') and window.timer:
+                    window.timer.stop()
+                del self.translation_windows[area_id]
+                logger.info(f"Removed translation window for area_id: {area_id}")
+            
+            logger.info(f"Translation windows after removal: {list(self.translation_windows.keys())}")
+            
+            # If no more translation windows are open, re-enable settings
+            if not self.translation_windows:
+                logger.info("No more translation windows, re-enabling settings")
+                self.update_settings_state(enabled=True)  # Explicitly pass True
+            else:
+                logger.info(f"Still have {len(self.translation_windows)} translation windows open")
             
             event.accept()
         except Exception as e:
@@ -524,6 +564,10 @@ class MainWindow(QMainWindow):
         try:
             # Ensure enabled is a boolean
             enabled = bool(enabled) if enabled is not None else True
+            
+            # Add logging to debug the issue
+            logger.info(f"update_settings_state called with enabled={enabled}")
+            logger.info(f"Number of translation windows: {len(self.translation_windows)}")
             
             # Font settings
             if hasattr(self, 'font_combo'):

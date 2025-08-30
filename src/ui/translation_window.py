@@ -353,6 +353,7 @@ class TranslationWindow(QMainWindow):
     def close_program(self):
         """Close the translation window."""
         try:
+            logger.info("close_program called")
             # Stop the translation process
             self.running = False
             self.is_capturing = False
@@ -362,6 +363,11 @@ class TranslationWindow(QMainWindow):
                 self.timer.stop()
             if hasattr(self, 'resize_timer') and self.resize_timer:
                 self.resize_timer.stop()
+            
+            # Call the main window's close handler if available
+            if hasattr(self, 'area_id') and hasattr(self, 'main_window_close_handler'):
+                logger.info(f"Calling main window close handler for area_id: {self.area_id}")
+                self.main_window_close_handler(self.area_id)
             
             # Close the window
             self.close()
