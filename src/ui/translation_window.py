@@ -21,10 +21,16 @@ logger = logging.getLogger(__name__)
 class TranslationCache:
     """Cache for translations to avoid redundant API calls."""
     
-    def __init__(self, max_size: int = 1000000):
+    def __init__(self, max_size: int = None, expiration_minutes: int = 20):
         self.cache = OrderedDict()
-        self.max_size = max_size
+        self.max_size = max_size  # None means unlimited
+        self.expiration_minutes = expiration_minutes
         self.lock = threading.Lock()
+        
+        # Start the cleanup timer
+        self.cleanup_timer = QTimer()
+        self.cleanup_timer.timeout.connect(self.cleanup_expired_entries)
+        self.cleanup_timer.start(60000)  # Check every minute
         
     def get_key(self, text: str, source_lang: str, target_lang: str) -> str:
         """Generate a cache key from text and language pair."""
@@ -35,21 +41,51 @@ class TranslationCache:
         with self.lock:
             key = self.get_key(text, source_lang, target_lang)
             if key in self.cache:
+                entry = self.cache[key]
+                # Check if entry has expired
+                if time.time() - entry['timestamp'] > (self.expiration_minutes * 60):
+                    self.cache.pop(key)
+                    return None
                 # Move to end (most recently used)
-                value = self.cache.pop(key)
-                self.cache[key] = value
-                return value
+                self.cache.pop(key)
+                self.cache[key] = entry
+                return entry['translation']
             return None
             
     def put(self, text: str, source_lang: str, target_lang: str, translation: str):
         """Add translation to cache."""
         with self.lock:
             key = self.get_key(text, source_lang, target_lang)
+            entry = {
+                'translation': translation,
+                'timestamp': time.time()
+            }
             if key in self.cache:
                 self.cache.pop(key)
-            elif len(self.cache) >= self.max_size:
+            elif self.max_size is not None and len(self.cache) >= self.max_size:
                 self.cache.popitem(last=False)  # Remove least recently used
-            self.cache[key] = translation
+            self.cache[key] = entry
+            
+    def cleanup_expired_entries(self):
+        """Remove expired entries from cache."""
+        with self.lock:
+            current_time = time.time()
+            expired_keys = []
+            for key, entry in self.cache.items():
+                if current_time - entry['timestamp'] > (self.expiration_minutes * 60):
+                    expired_keys.append(key)
+            
+            for key in expired_keys:
+                self.cache.pop(key, None)
+                
+            if expired_keys:
+                logger.info(f"Cleaned up {len(expired_keys)} expired cache entries")
+                
+    def clear_all(self):
+        """Clear all cache entries."""
+        with self.lock:
+            self.cache.clear()
+            logger.info("Translation cache cleared")
 
 class RateLimiter:
     """Rate limiter for API calls."""
@@ -89,7 +125,7 @@ class TranslationWindow(QMainWindow):
         self.settings = settings
         
         # Initialize translation cache and rate limiter
-        self.translation_cache = TranslationCache()
+        self.translation_cache = TranslationCache(max_size=None, expiration_minutes=20)  # Unlimited cache with 20min expiration
         self.rate_limiter = RateLimiter(max_calls=1000, time_window=86400)  # 1000 calls per day
         
         # Set minimum size
@@ -363,6 +399,8 @@ class TranslationWindow(QMainWindow):
                 self.timer.stop()
             if hasattr(self, 'resize_timer') and self.resize_timer:
                 self.resize_timer.stop()
+            if hasattr(self, 'translation_cache') and hasattr(self.translation_cache, 'cleanup_timer'):
+                self.translation_cache.cleanup_timer.stop()
             
             # Call the main window's close handler if available
             if hasattr(self, 'area_id') and hasattr(self, 'main_window_close_handler'):
@@ -389,6 +427,8 @@ class TranslationWindow(QMainWindow):
                 self.timer.stop()
             if hasattr(self, 'resize_timer') and self.resize_timer:
                 self.resize_timer.stop()
+            if hasattr(self, 'translation_cache') and hasattr(self.translation_cache, 'cleanup_timer'):
+                self.translation_cache.cleanup_timer.stop()
             
             # Accept the close event
             event.accept()
