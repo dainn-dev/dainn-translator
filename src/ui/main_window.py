@@ -406,7 +406,8 @@ class MainWindow(QMainWindow):
             self.translation_windows[area_id] = translation_window
             
             # Connect the closeEvent of the translation window
-            translation_window.closeEvent = lambda event: self.handle_translation_window_close(event, area_id)
+            translation_window.area_id = area_id  # Store area_id for reference
+            translation_window.closeEvent = self.handle_translation_window_close_wrapper
             
             translation_window.show()
             
@@ -418,13 +419,29 @@ class MainWindow(QMainWindow):
             logger.error(f"Error in start_translation: {str(e)}", exc_info=True)
             show_error_message(self, "Error", f"Failed to start translation: {str(e)}")
 
+    def handle_translation_window_close_wrapper(self, event):
+        """Wrapper for handling translation window close events."""
+        try:
+            # Get the sender (the window that's closing)
+            sender = self.sender()
+            if sender and hasattr(sender, 'area_id'):
+                area_id = sender.area_id
+                self.handle_translation_window_close(event, area_id)
+            else:
+                event.accept()
+        except Exception as e:
+            logger.error(f"Error in close wrapper: {str(e)}", exc_info=True)
+            event.accept()
+
     def handle_translation_window_close(self, event, area_id):
         """Handle the closure of a translation window."""
         try:
             if area_id in self.translation_windows:
                 window = self.translation_windows[area_id]
-                window.running = False
-                window.timer.stop()
+                if hasattr(window, 'running'):
+                    window.running = False
+                if hasattr(window, 'timer') and window.timer:
+                    window.timer.stop()
                 del self.translation_windows[area_id]
             
             # If no more translation windows are open, re-enable settings
@@ -438,29 +455,64 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close event."""
-        # Save window position
-        if self.config_manager:
-            self.config_manager.set_global_setting('main_window_pos', f"{self.x()},{self.y()}")
-        
-        # Close all translation windows
-        for area_id in list(self.translation_windows.keys()):  # Create a copy of keys to avoid modification during iteration
-            try:
-                window = self.translation_windows.get(area_id)
-                if window and window.isVisible():
-                    window.close()
-                # Remove from dictionary regardless of whether it was closed or not
-                self.translation_windows.pop(area_id, None)
-            except Exception as e:
-                logger.error(f"Error closing translation window {area_id}: {str(e)}")
-                # Continue with other windows even if one fails
-                continue
-        
-        # Stop the translation timer
-        if hasattr(self, 'timer') and self.timer:
-            self.timer.stop()
-        
-        # Accept the close event
-        event.accept()
+        try:
+            # Check if there are active translation windows
+            active_windows = [window for window in self.translation_windows.values() 
+                            if window and window.isVisible()]
+            
+            if active_windows:
+                # Ask user if they want to close all translation windows
+                reply = QMessageBox.question(
+                    self, 
+                    "Close Application", 
+                    f"You have {len(active_windows)} active translation window(s).\nDo you want to close all translation windows and exit the application?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                
+                if reply == QMessageBox.No:
+                    event.ignore()
+                    return
+            
+            # Save window position
+            if self.config_manager:
+                self.config_manager.set_global_setting('main_window_pos', f"{self.x()},{self.y()}")
+            
+            # Close all translation windows gracefully
+            for area_id in list(self.translation_windows.keys()):  # Create a copy of keys to avoid modification during iteration
+                try:
+                    window = self.translation_windows.get(area_id)
+                    if window and window.isVisible():
+                        # Stop the translation process first
+                        if hasattr(window, 'running'):
+                            window.running = False
+                        if hasattr(window, 'timer') and window.timer:
+                            window.timer.stop()
+                        
+                        # Close the window
+                        window.close()
+                        
+                        # Wait a moment for cleanup
+                        QApplication.processEvents()
+                    
+                    # Remove from dictionary
+                    self.translation_windows.pop(area_id, None)
+                except Exception as e:
+                    logger.error(f"Error closing translation window {area_id}: {str(e)}")
+                    # Continue with other windows even if one fails
+                    continue
+            
+            # Stop any remaining timers
+            if hasattr(self, 'timer') and self.timer:
+                self.timer.stop()
+            
+            # Accept the close event
+            event.accept()
+            
+        except Exception as e:
+            logger.error(f"Error in main window closeEvent: {str(e)}", exc_info=True)
+            # Still accept the close event even if there's an error
+            event.accept()
 
     def update_button_states(self):
         """Update button states based on area selection."""

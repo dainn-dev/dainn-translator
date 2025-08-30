@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import OrderedDict
 import time
 import threading
+import hashlib
+import cv2
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +270,54 @@ class TranslationWindow(QMainWindow):
         self.current_interval = self.min_interval
         self.consecutive_empty_frames = 0
         self.is_capturing = False
+        
+        # Frame change detection variables
+        self.last_frame_hash = None
+        self.last_frame = None
+        self.consecutive_same_frames = 0
+        self.max_same_frames = 10  # After 10 same frames, increase interval
+        self.frame_change_threshold = 0.95  # Hash similarity threshold
+        self.min_change_threshold = 0.85  # Minimum similarity to consider frames different
+
+    def get_frame_hash(self, frame: np.ndarray) -> str:
+        """Generate a hash for frame change detection."""
+        try:
+            # Resize frame to reduce computation
+            small_frame = cv2.resize(frame, (64, 64))
+            # Convert to grayscale
+            gray_frame = cv2.cvtColor(small_frame, cv2.COLOR_RGB2GRAY)
+            # Generate hash
+            frame_hash = hashlib.md5(gray_frame.tobytes()).hexdigest()
+            return frame_hash
+        except Exception as e:
+            logger.error(f"Error generating frame hash: {str(e)}")
+            return None
+
+    def frames_are_similar(self, hash1: str, hash2: str) -> bool:
+        """Check if two frame hashes are similar (indicating similar content)."""
+        if not hash1 or not hash2:
+            return False
+        return hash1 == hash2
+    
+    def calculate_frame_similarity(self, frame1: np.ndarray, frame2: np.ndarray) -> float:
+        """Calculate similarity between two frames using structural similarity index."""
+        try:
+            # Resize frames to same size for comparison
+            size = (128, 128)
+            frame1_resized = cv2.resize(frame1, size)
+            frame2_resized = cv2.resize(frame2, size)
+            
+            # Convert to grayscale
+            gray1 = cv2.cvtColor(frame1_resized, cv2.COLOR_RGB2GRAY)
+            gray2 = cv2.cvtColor(frame2_resized, cv2.COLOR_RGB2GRAY)
+            
+            # Calculate structural similarity
+            from skimage.metrics import structural_similarity as ssim
+            similarity = ssim(gray1, gray2)
+            return similarity
+        except Exception as e:
+            logger.error(f"Error calculating frame similarity: {str(e)}")
+            return 0.0
 
     def position_buttons(self):
         """Position the buttons."""
@@ -302,9 +352,45 @@ class TranslationWindow(QMainWindow):
 
     def close_program(self):
         """Close the translation window."""
-        self.running = False
-        self.timer.stop()
-        self.close()
+        try:
+            # Stop the translation process
+            self.running = False
+            self.is_capturing = False
+            
+            # Stop timers
+            if hasattr(self, 'timer') and self.timer:
+                self.timer.stop()
+            if hasattr(self, 'resize_timer') and self.resize_timer:
+                self.resize_timer.stop()
+            
+            # Close the window
+            self.close()
+            
+        except Exception as e:
+            logger.error(f"Error in close_program: {str(e)}", exc_info=True)
+            # Still try to close the window
+            self.close()
+
+    def closeEvent(self, event):
+        """Handle window close event."""
+        try:
+            # Stop the translation process
+            self.running = False
+            self.is_capturing = False
+            
+            # Stop timers
+            if hasattr(self, 'timer') and self.timer:
+                self.timer.stop()
+            if hasattr(self, 'resize_timer') and self.resize_timer:
+                self.resize_timer.stop()
+            
+            # Accept the close event
+            event.accept()
+            
+        except Exception as e:
+            logger.error(f"Error in translation window closeEvent: {str(e)}", exc_info=True)
+            # Still accept the close event even if there's an error
+            event.accept()
 
     def toggle_capture(self):
         """Toggle the capture state."""
@@ -316,7 +402,7 @@ class TranslationWindow(QMainWindow):
                 f"QPushButton:hover {{ background-color: rgba(255,255,255,100); color: #ffffff; }}"
             )
             self.running = True
-            self.timer.start(self.current_interval)
+            self.timer.start(int(self.current_interval))
         else:
             self.capture_button.setText("▶")
             self.capture_button.setStyleSheet(
@@ -345,7 +431,38 @@ class TranslationWindow(QMainWindow):
                 future = executor.submit(capture_screen)
                 screenshot = future.result()
             
-            # Process the frame
+            # Check for frame changes before calling Vision API
+            current_frame_hash = self.get_frame_hash(screenshot)
+            
+            # Use both hash comparison and structural similarity for better detection
+            frames_similar = False
+            if self.last_frame is not None and self.last_frame_hash is not None:
+                # Quick hash check first
+                if self.frames_are_similar(current_frame_hash, self.last_frame_hash):
+                    frames_similar = True
+                else:
+                    # If hash is different, check structural similarity for subtle changes
+                    similarity = self.calculate_frame_similarity(screenshot, self.last_frame)
+                    frames_similar = similarity > self.min_change_threshold
+            
+            # If frame hasn't changed significantly, skip Vision API call
+            if frames_similar:
+                self.consecutive_same_frames += 1
+                # Increase interval if we've had many consecutive same frames
+                if self.consecutive_same_frames > self.max_same_frames:
+                    self.current_interval = min(self.current_interval * 1.2, self.max_interval)
+                    self.timer.setInterval(int(self.current_interval))
+                self.processing = False
+                return
+            
+            # Frame has changed, reset counters and call Vision API
+            self.consecutive_same_frames = 0
+            self.current_interval = self.min_interval
+            self.timer.setInterval(int(self.current_interval))
+            self.last_frame_hash = current_frame_hash
+            self.last_frame = screenshot.copy()
+            
+            # Process the frame with Vision API
             text = self.text_processor.detect_text(screenshot)
             
             # Update Vision API counter
@@ -407,6 +524,7 @@ class TranslationWindow(QMainWindow):
                 translated_text
             )
             
+            # Update display
             self.update_text(translated_text)
             self.last_text = text
             self.last_translated_text = translated_text
