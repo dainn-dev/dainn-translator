@@ -13,16 +13,24 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import OrderedDict
 import time
 import threading
+import hashlib
+import cv2
 
 logger = logging.getLogger(__name__)
 
 class TranslationCache:
     """Cache for translations to avoid redundant API calls."""
     
-    def __init__(self, max_size: int = 1000):
+    def __init__(self, max_size: int = None, expiration_minutes: int = 20):
         self.cache = OrderedDict()
-        self.max_size = max_size
+        self.max_size = max_size  # None means unlimited
+        self.expiration_minutes = expiration_minutes
         self.lock = threading.Lock()
+        
+        # Start the cleanup timer
+        self.cleanup_timer = QTimer()
+        self.cleanup_timer.timeout.connect(self.cleanup_expired_entries)
+        self.cleanup_timer.start(60000)  # Check every minute
         
     def get_key(self, text: str, source_lang: str, target_lang: str) -> str:
         """Generate a cache key from text and language pair."""
@@ -33,21 +41,51 @@ class TranslationCache:
         with self.lock:
             key = self.get_key(text, source_lang, target_lang)
             if key in self.cache:
+                entry = self.cache[key]
+                # Check if entry has expired
+                if time.time() - entry['timestamp'] > (self.expiration_minutes * 60):
+                    self.cache.pop(key)
+                    return None
                 # Move to end (most recently used)
-                value = self.cache.pop(key)
-                self.cache[key] = value
-                return value
+                self.cache.pop(key)
+                self.cache[key] = entry
+                return entry['translation']
             return None
             
     def put(self, text: str, source_lang: str, target_lang: str, translation: str):
         """Add translation to cache."""
         with self.lock:
             key = self.get_key(text, source_lang, target_lang)
+            entry = {
+                'translation': translation,
+                'timestamp': time.time()
+            }
             if key in self.cache:
                 self.cache.pop(key)
-            elif len(self.cache) >= self.max_size:
+            elif self.max_size is not None and len(self.cache) >= self.max_size:
                 self.cache.popitem(last=False)  # Remove least recently used
-            self.cache[key] = translation
+            self.cache[key] = entry
+            
+    def cleanup_expired_entries(self):
+        """Remove expired entries from cache."""
+        with self.lock:
+            current_time = time.time()
+            expired_keys = []
+            for key, entry in self.cache.items():
+                if current_time - entry['timestamp'] > (self.expiration_minutes * 60):
+                    expired_keys.append(key)
+            
+            for key in expired_keys:
+                self.cache.pop(key, None)
+                
+            if expired_keys:
+                logger.info(f"Cleaned up {len(expired_keys)} expired cache entries")
+                
+    def clear_all(self):
+        """Clear all cache entries."""
+        with self.lock:
+            self.cache.clear()
+            logger.info("Translation cache cleared")
 
 class RateLimiter:
     """Rate limiter for API calls."""
@@ -87,7 +125,7 @@ class TranslationWindow(QMainWindow):
         self.settings = settings
         
         # Initialize translation cache and rate limiter
-        self.translation_cache = TranslationCache()
+        self.translation_cache = TranslationCache(max_size=None, expiration_minutes=20)  # Unlimited cache with 20min expiration
         self.rate_limiter = RateLimiter(max_calls=1000, time_window=86400)  # 1000 calls per day
         
         # Set minimum size
@@ -268,6 +306,54 @@ class TranslationWindow(QMainWindow):
         self.current_interval = self.min_interval
         self.consecutive_empty_frames = 0
         self.is_capturing = False
+        
+        # Frame change detection variables
+        self.last_frame_hash = None
+        self.last_frame = None
+        self.consecutive_same_frames = 0
+        self.max_same_frames = 10  # After 10 same frames, increase interval
+        self.frame_change_threshold = 0.95  # Hash similarity threshold
+        self.min_change_threshold = 0.85  # Minimum similarity to consider frames different
+
+    def get_frame_hash(self, frame: np.ndarray) -> str:
+        """Generate a hash for frame change detection."""
+        try:
+            # Resize frame to reduce computation
+            small_frame = cv2.resize(frame, (64, 64))
+            # Convert to grayscale
+            gray_frame = cv2.cvtColor(small_frame, cv2.COLOR_RGB2GRAY)
+            # Generate hash
+            frame_hash = hashlib.md5(gray_frame.tobytes()).hexdigest()
+            return frame_hash
+        except Exception as e:
+            logger.error(f"Error generating frame hash: {str(e)}")
+            return None
+
+    def frames_are_similar(self, hash1: str, hash2: str) -> bool:
+        """Check if two frame hashes are similar (indicating similar content)."""
+        if not hash1 or not hash2:
+            return False
+        return hash1 == hash2
+    
+    def calculate_frame_similarity(self, frame1: np.ndarray, frame2: np.ndarray) -> float:
+        """Calculate similarity between two frames using structural similarity index."""
+        try:
+            # Resize frames to same size for comparison
+            size = (128, 128)
+            frame1_resized = cv2.resize(frame1, size)
+            frame2_resized = cv2.resize(frame2, size)
+            
+            # Convert to grayscale
+            gray1 = cv2.cvtColor(frame1_resized, cv2.COLOR_RGB2GRAY)
+            gray2 = cv2.cvtColor(frame2_resized, cv2.COLOR_RGB2GRAY)
+            
+            # Calculate structural similarity
+            from skimage.metrics import structural_similarity as ssim
+            similarity = ssim(gray1, gray2)
+            return similarity
+        except Exception as e:
+            logger.error(f"Error calculating frame similarity: {str(e)}")
+            return 0.0
 
     def position_buttons(self):
         """Position the buttons."""
@@ -302,9 +388,55 @@ class TranslationWindow(QMainWindow):
 
     def close_program(self):
         """Close the translation window."""
-        self.running = False
-        self.timer.stop()
-        self.close()
+        try:
+            logger.info("close_program called")
+            # Stop the translation process
+            self.running = False
+            self.is_capturing = False
+            
+            # Stop timers
+            if hasattr(self, 'timer') and self.timer:
+                self.timer.stop()
+            if hasattr(self, 'resize_timer') and self.resize_timer:
+                self.resize_timer.stop()
+            if hasattr(self, 'translation_cache') and hasattr(self.translation_cache, 'cleanup_timer'):
+                self.translation_cache.cleanup_timer.stop()
+            
+            # Call the main window's close handler if available
+            if hasattr(self, 'area_id') and hasattr(self, 'main_window_close_handler'):
+                logger.info(f"Calling main window close handler for area_id: {self.area_id}")
+                self.main_window_close_handler(self.area_id)
+            
+            # Close the window
+            self.close()
+            
+        except Exception as e:
+            logger.error(f"Error in close_program: {str(e)}", exc_info=True)
+            # Still try to close the window
+            self.close()
+
+    def closeEvent(self, event):
+        """Handle window close event."""
+        try:
+            # Stop the translation process
+            self.running = False
+            self.is_capturing = False
+            
+            # Stop timers
+            if hasattr(self, 'timer') and self.timer:
+                self.timer.stop()
+            if hasattr(self, 'resize_timer') and self.resize_timer:
+                self.resize_timer.stop()
+            if hasattr(self, 'translation_cache') and hasattr(self.translation_cache, 'cleanup_timer'):
+                self.translation_cache.cleanup_timer.stop()
+            
+            # Accept the close event
+            event.accept()
+            
+        except Exception as e:
+            logger.error(f"Error in translation window closeEvent: {str(e)}", exc_info=True)
+            # Still accept the close event even if there's an error
+            event.accept()
 
     def toggle_capture(self):
         """Toggle the capture state."""
@@ -316,7 +448,7 @@ class TranslationWindow(QMainWindow):
                 f"QPushButton:hover {{ background-color: rgba(255,255,255,100); color: #ffffff; }}"
             )
             self.running = True
-            self.timer.start(self.current_interval)
+            self.timer.start(int(self.current_interval))
         else:
             self.capture_button.setText("▶")
             self.capture_button.setStyleSheet(
@@ -345,7 +477,38 @@ class TranslationWindow(QMainWindow):
                 future = executor.submit(capture_screen)
                 screenshot = future.result()
             
-            # Process the frame
+            # Check for frame changes before calling Vision API
+            current_frame_hash = self.get_frame_hash(screenshot)
+            
+            # Use both hash comparison and structural similarity for better detection
+            frames_similar = False
+            if self.last_frame is not None and self.last_frame_hash is not None:
+                # Quick hash check first
+                if self.frames_are_similar(current_frame_hash, self.last_frame_hash):
+                    frames_similar = True
+                else:
+                    # If hash is different, check structural similarity for subtle changes
+                    similarity = self.calculate_frame_similarity(screenshot, self.last_frame)
+                    frames_similar = similarity > self.min_change_threshold
+            
+            # If frame hasn't changed significantly, skip Vision API call
+            if frames_similar:
+                self.consecutive_same_frames += 1
+                # Increase interval if we've had many consecutive same frames
+                if self.consecutive_same_frames > self.max_same_frames:
+                    self.current_interval = min(self.current_interval * 1.2, self.max_interval)
+                    self.timer.setInterval(int(self.current_interval))
+                self.processing = False
+                return
+            
+            # Frame has changed, reset counters and call Vision API
+            self.consecutive_same_frames = 0
+            self.current_interval = self.min_interval
+            self.timer.setInterval(int(self.current_interval))
+            self.last_frame_hash = current_frame_hash
+            self.last_frame = screenshot.copy()
+            
+            # Process the frame with Vision API
             text = self.text_processor.detect_text(screenshot)
             
             # Update Vision API counter
@@ -407,6 +570,7 @@ class TranslationWindow(QMainWindow):
                 translated_text
             )
             
+            # Update display
             self.update_text(translated_text)
             self.last_text = text
             self.last_translated_text = translated_text
@@ -544,9 +708,31 @@ class TranslationWindow(QMainWindow):
         height_diff = current_pos.y() - self.resize_start_pos.y()
         new_width = max(self.min_width, self.resize_start_size.width() + width_diff)
         new_height = max(self.min_height, self.resize_start_size.height() + height_diff)
-        screen = QApplication.primaryScreen().geometry()
-        new_width = min(new_width, screen.width() - self.x())
-        new_height = min(new_height, screen.height() - self.y())
+        
+        # Get all available screens
+        screens = QApplication.screens()
+        # Find the screen that contains the current position
+        current_screen = None
+        for screen in screens:
+            if screen.geometry().contains(current_pos):
+                current_screen = screen
+                break
+        
+        # If no screen contains the position, use the screen that contains the window
+        if not current_screen:
+            for screen in screens:
+                if screen.geometry().contains(self.pos()):
+                    current_screen = screen
+                    break
+        
+        # If still no screen found, use primary screen
+        if not current_screen:
+            current_screen = QApplication.primaryScreen()
+        
+        screen_geometry = current_screen.geometry()
+        new_width = min(new_width, screen_geometry.width() - (self.x() - screen_geometry.x()))
+        new_height = min(new_height, screen_geometry.height() - (self.y() - screen_geometry.y()))
+        
         self.resize(new_width, new_height)
         content_width = new_width - 40
         self.name_label.setFixedWidth(content_width)

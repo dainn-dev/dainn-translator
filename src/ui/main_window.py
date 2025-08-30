@@ -60,19 +60,6 @@ class MainWindow(QMainWindow):
         self.text_processor = text_processor
         self.translation_windows = {}
 
-        # Check Tesseract availability and update checkbox
-        if self.text_processor:
-            if self.text_processor.use_local_ocr:
-                # Tesseract is available, enable and check the checkbox
-                self.use_local_ocr_checkbox.setEnabled(True)
-                self.use_local_ocr_checkbox.setChecked(True)
-                self.config_manager.set_global_setting('use_local_ocr', 'true')
-            else:
-                # Tesseract is not available, disable and uncheck the checkbox
-                self.use_local_ocr_checkbox.setEnabled(False)
-                self.use_local_ocr_checkbox.setChecked(False)
-                self.config_manager.set_global_setting('use_local_ocr', 'false')
-
         # Check for updates after a short delay to ensure the window is fully loaded
         QTimer.singleShot(2000, self.check_for_updates)
 
@@ -90,65 +77,6 @@ class MainWindow(QMainWindow):
         )
         self.main_layout.addWidget(self.settings_group)
         self.settings_layout = QVBoxLayout(self.settings_group)
-
-        # Add OCR settings
-        ocr_settings_layout = QHBoxLayout()
-        self.use_local_ocr_checkbox = QCheckBox("Use Local OCR (EasyOCR)")
-        self.use_local_ocr_checkbox.setChecked(True)
-        self.use_local_ocr_checkbox.setEnabled(True)
-        self.use_local_ocr_checkbox.stateChanged.connect(self.on_ocr_setting_changed)
-        ocr_settings_layout.addWidget(self.use_local_ocr_checkbox)
-        self.settings_layout.addLayout(ocr_settings_layout)
-
-        # Add Translator Settings panel
-        self.translator_group = QGroupBox("Translator Settings")
-        self.translator_group.setStyleSheet(
-            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: {self.frame_bg}; }}"
-        )
-        self.settings_layout.addWidget(self.translator_group)
-        self.translator_layout = QVBoxLayout(self.translator_group)
-
-        # API Settings
-        api_settings_layout = QHBoxLayout()
-        self.use_translate_api_checkbox = QCheckBox("Use Google Translate API")
-        self.use_translate_api_checkbox.setChecked(self.config_manager.get_global_setting('use_translate_api', 'true').lower() == 'true')
-        self.use_translate_api_checkbox.stateChanged.connect(self.on_translate_api_setting_changed)
-        api_settings_layout.addWidget(self.use_translate_api_checkbox)
-        self.translator_layout.addLayout(api_settings_layout)
-
-        # Translator Selection
-        translator_selection_layout = QHBoxLayout()
-        translator_label = QLabel("Web Translator:")
-        translator_selection_layout.addWidget(translator_label)
-        self.translator_combo = QComboBox()
-        self.translator_combo.addItems([service.value for service in TranslatorService])
-        self.translator_combo.setCurrentText(self.config_manager.get_global_setting('translator_service', 'Google'))
-        self.translator_combo.currentTextChanged.connect(self.on_translator_changed)
-        translator_selection_layout.addWidget(self.translator_combo)
-        self.translator_layout.addLayout(translator_selection_layout)
-
-        # Add warning labels
-        self.credentials_warning = QLabel("⚠️ Invalid Google Cloud credentials. Web-based translation will be used.")
-        self.credentials_warning.setStyleSheet(
-            "color: #FFA500; background-color: rgba(255, 165, 0, 0.1); padding: 8px; border-radius: 4px;"
-        )
-        self.credentials_warning.setWordWrap(True)
-        self.credentials_warning.hide()
-        self.translator_layout.addWidget(self.credentials_warning)
-
-        self.translator_warning = QLabel("⚠️ Selected translator is not supported for the current language pair.")
-        self.translator_warning.setStyleSheet(
-            "color: #FFA500; background-color: rgba(255, 165, 0, 0.1); padding: 8px; border-radius: 4px;"
-        )
-        self.translator_warning.setWordWrap(True)
-        self.translator_warning.hide()
-        self.translator_layout.addWidget(self.translator_warning)
-
-        # Add a separator
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        self.settings_layout.addWidget(separator)
 
         # Font settings
         self.font_group = QGroupBox("Font Settings")
@@ -477,8 +405,9 @@ class MainWindow(QMainWindow):
             translation_window.timer.start(1000)
             self.translation_windows[area_id] = translation_window
             
-            # Connect the closeEvent of the translation window
-            translation_window.closeEvent = lambda event: self.handle_translation_window_close(event, area_id)
+            # Connect the close handler to the translation window
+            translation_window.area_id = area_id  # Store area_id for reference
+            translation_window.main_window_close_handler = self.handle_translation_window_close_direct
             
             translation_window.show()
             
@@ -490,18 +419,74 @@ class MainWindow(QMainWindow):
             logger.error(f"Error in start_translation: {str(e)}", exc_info=True)
             show_error_message(self, "Error", f"Failed to start translation: {str(e)}")
 
-    def handle_translation_window_close(self, event, area_id):
-        """Handle the closure of a translation window."""
+    def handle_translation_window_close_wrapper(self, event):
+        """Wrapper for handling translation window close events."""
         try:
+            logger.info("handle_translation_window_close_wrapper called")
+            # Get the sender (the window that's closing)
+            sender = self.sender()
+            logger.info(f"Sender: {sender}")
+            if sender and hasattr(sender, 'area_id'):
+                area_id = sender.area_id
+                logger.info(f"Found area_id: {area_id}")
+                self.handle_translation_window_close(event, area_id)
+            else:
+                logger.warning("No sender or area_id found")
+                event.accept()
+        except Exception as e:
+            logger.error(f"Error in close wrapper: {str(e)}", exc_info=True)
+            event.accept()
+
+    def handle_translation_window_close_direct(self, area_id):
+        """Handle the closure of a translation window directly (called from close button)."""
+        try:
+            logger.info(f"handle_translation_window_close_direct called for area_id: {area_id}")
+            logger.info(f"Translation windows before removal: {list(self.translation_windows.keys())}")
+            
             if area_id in self.translation_windows:
                 window = self.translation_windows[area_id]
-                window.running = False
-                window.timer.stop()
+                if hasattr(window, 'running'):
+                    window.running = False
+                if hasattr(window, 'timer') and window.timer:
+                    window.timer.stop()
                 del self.translation_windows[area_id]
+                logger.info(f"Removed translation window for area_id: {area_id}")
+            
+            logger.info(f"Translation windows after removal: {list(self.translation_windows.keys())}")
             
             # If no more translation windows are open, re-enable settings
             if not self.translation_windows:
+                logger.info("No more translation windows, re-enabling settings")
                 self.update_settings_state(enabled=True)  # Explicitly pass True
+            else:
+                logger.info(f"Still have {len(self.translation_windows)} translation windows open")
+            
+        except Exception as e:
+            logger.error(f"Error handling translation window close: {str(e)}", exc_info=True)
+
+    def handle_translation_window_close(self, event, area_id):
+        """Handle the closure of a translation window."""
+        try:
+            logger.info(f"handle_translation_window_close called for area_id: {area_id}")
+            logger.info(f"Translation windows before removal: {list(self.translation_windows.keys())}")
+            
+            if area_id in self.translation_windows:
+                window = self.translation_windows[area_id]
+                if hasattr(window, 'running'):
+                    window.running = False
+                if hasattr(window, 'timer') and window.timer:
+                    window.timer.stop()
+                del self.translation_windows[area_id]
+                logger.info(f"Removed translation window for area_id: {area_id}")
+            
+            logger.info(f"Translation windows after removal: {list(self.translation_windows.keys())}")
+            
+            # If no more translation windows are open, re-enable settings
+            if not self.translation_windows:
+                logger.info("No more translation windows, re-enabling settings")
+                self.update_settings_state(enabled=True)  # Explicitly pass True
+            else:
+                logger.info(f"Still have {len(self.translation_windows)} translation windows open")
             
             event.accept()
         except Exception as e:
@@ -510,29 +495,64 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close event."""
-        # Save window position
-        if self.config_manager:
-            self.config_manager.set_global_setting('main_window_pos', f"{self.x()},{self.y()}")
-        
-        # Close all translation windows
-        for area_id in list(self.translation_windows.keys()):  # Create a copy of keys to avoid modification during iteration
-            try:
-                window = self.translation_windows.get(area_id)
-                if window and window.isVisible():
-                    window.close()
-                # Remove from dictionary regardless of whether it was closed or not
-                self.translation_windows.pop(area_id, None)
-            except Exception as e:
-                logger.error(f"Error closing translation window {area_id}: {str(e)}")
-                # Continue with other windows even if one fails
-                continue
-        
-        # Stop the translation timer
-        if hasattr(self, 'timer') and self.timer:
-            self.timer.stop()
-        
-        # Accept the close event
-        event.accept()
+        try:
+            # Check if there are active translation windows
+            active_windows = [window for window in self.translation_windows.values() 
+                            if window and window.isVisible()]
+            
+            if active_windows:
+                # Ask user if they want to close all translation windows
+                reply = QMessageBox.question(
+                    self, 
+                    "Close Application", 
+                    f"You have {len(active_windows)} active translation window(s).\nDo you want to close all translation windows and exit the application?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                
+                if reply == QMessageBox.No:
+                    event.ignore()
+                    return
+            
+            # Save window position
+            if self.config_manager:
+                self.config_manager.set_global_setting('main_window_pos', f"{self.x()},{self.y()}")
+            
+            # Close all translation windows gracefully
+            for area_id in list(self.translation_windows.keys()):  # Create a copy of keys to avoid modification during iteration
+                try:
+                    window = self.translation_windows.get(area_id)
+                    if window and window.isVisible():
+                        # Stop the translation process first
+                        if hasattr(window, 'running'):
+                            window.running = False
+                        if hasattr(window, 'timer') and window.timer:
+                            window.timer.stop()
+                        
+                        # Close the window
+                        window.close()
+                        
+                        # Wait a moment for cleanup
+                        QApplication.processEvents()
+                    
+                    # Remove from dictionary
+                    self.translation_windows.pop(area_id, None)
+                except Exception as e:
+                    logger.error(f"Error closing translation window {area_id}: {str(e)}")
+                    # Continue with other windows even if one fails
+                    continue
+            
+            # Stop any remaining timers
+            if hasattr(self, 'timer') and self.timer:
+                self.timer.stop()
+            
+            # Accept the close event
+            event.accept()
+            
+        except Exception as e:
+            logger.error(f"Error in main window closeEvent: {str(e)}", exc_info=True)
+            # Still accept the close event even if there's an error
+            event.accept()
 
     def update_button_states(self):
         """Update button states based on area selection."""
@@ -544,6 +564,10 @@ class MainWindow(QMainWindow):
         try:
             # Ensure enabled is a boolean
             enabled = bool(enabled) if enabled is not None else True
+            
+            # Add logging to debug the issue
+            logger.info(f"update_settings_state called with enabled={enabled}")
+            logger.info(f"Number of translation windows: {len(self.translation_windows)}")
             
             # Font settings
             if hasattr(self, 'font_combo'):
@@ -576,16 +600,6 @@ class MainWindow(QMainWindow):
                 self.credentials_edit.setEnabled(enabled)
             if hasattr(self, 'browse_button'):
                 self.browse_button.setEnabled(enabled)
-            
-            # OCR settings
-            if hasattr(self, 'use_local_ocr_checkbox'):
-                self.use_local_ocr_checkbox.setEnabled(enabled and self.text_processor and self.text_processor.use_local_ocr)
-
-            # Translation settings
-            if hasattr(self, 'use_translate_api_checkbox'):
-                self.use_translate_api_checkbox.setEnabled(enabled and self.validate_credentials())
-            if hasattr(self, 'translator_combo'):
-                self.translator_combo.setEnabled(enabled and not self.use_translate_api_checkbox.isChecked())
             
             # Area management buttons - always enabled
             if hasattr(self, 'add_button'):
@@ -709,9 +723,6 @@ class MainWindow(QMainWindow):
                     self.config_manager.get_global_setting('target_language', 'vi')))
                 return
 
-            # Check translator support for the new language pair
-            self.check_translator_support()
-
             settings = {
                 'font_family': self.font_combo.currentText(),
                 'font_size': self.font_size_edit.text(),
@@ -781,110 +792,6 @@ class MainWindow(QMainWindow):
                                    "Restart now to apply new credentials?") == QMessageBox.Yes:
                 QApplication.quit()
                 os.execv(sys.executable, ['python'] + sys.argv)
-
-    def on_ocr_setting_changed(self, state):
-        """Handle OCR setting change."""
-        use_local_ocr = state == Qt.Checked
-        self.config_manager.set_global_setting('use_local_ocr', str(use_local_ocr).lower())
-        if self.text_processor:
-            self.text_processor.use_local_ocr = use_local_ocr
-            # Update all active translation windows
-            for window in self.translation_windows.values():
-                if window.isVisible():
-                    window.text_processor.use_local_ocr = use_local_ocr
-            logger.info(f"OCR setting changed: use_local_ocr={use_local_ocr}")
-
-    def on_translate_api_setting_changed(self, state):
-        """Handle translation API setting change."""
-        use_api = state == Qt.Checked
-        if use_api and not self.validate_credentials():
-            self.use_translate_api_checkbox.setChecked(False)
-            self.credentials_warning.show()
-            return
-
-        self.credentials_warning.hide()
-        self.config_manager.set_global_setting('use_translate_api', str(use_api).lower())
-        if self.text_processor:
-            self.text_processor.set_use_translate_api(use_api)
-            # Update all active translation windows
-            for window in self.translation_windows.values():
-                if window.isVisible():
-                    window.text_processor.set_use_translate_api(use_api)
-        
-        # Update translator combo state
-        self.translator_combo.setEnabled(not use_api)
-        
-        logger.info(f"Translation API setting changed: use_api={use_api}")
-
-    def validate_credentials(self) -> bool:
-        """Validate Google Cloud credentials."""
-        try:
-            credentials_path = self.credentials_edit.text()
-            if not credentials_path or not os.path.exists(credentials_path):
-                return False
-            return validate_credentials(credentials_path)
-        except Exception as e:
-            logger.error(f"Error validating credentials: {str(e)}")
-            return False
-
-    def on_translator_changed(self, translator: str):
-        """Handle translator selection change."""
-        try:
-            service = TranslatorService(translator)
-            if self.text_processor:
-                self.text_processor.set_translator_service(service)
-                # Update all active translation windows
-                for window in self.translation_windows.values():
-                    if window.isVisible():
-                        window.text_processor.set_translator_service(service)
-            
-            # Check if the selected translator supports the current language pair
-            self.check_translator_support()
-            
-            logger.info(f"Translator changed to: {translator}")
-        except Exception as e:
-            logger.error(f"Error changing translator: {str(e)}")
-            self.translator_warning.show()
-
-    def check_translator_support(self):
-        """Check if the selected translator supports the current language pair."""
-        try:
-            source_lang = self.language_name_to_code.get(self.source_lang_combo.currentText(), 'en')
-            target_lang = self.language_name_to_code.get(self.target_lang_combo.currentText(), 'vi')
-            translator = self.translator_combo.currentText()
-
-            # Define supported language pairs for each translator
-            supported_pairs = {
-                'Google': True,  # Google supports all language pairs
-                'DeepL': {
-                    'en': ['de', 'fr', 'es', 'it', 'nl', 'pl', 'pt', 'ru'],
-                    'de': ['en', 'fr', 'es', 'it', 'nl', 'pl', 'pt', 'ru'],
-                    'fr': ['en', 'de', 'es', 'it', 'nl', 'pl', 'pt', 'ru'],
-                    'es': ['en', 'de', 'fr', 'it', 'nl', 'pl', 'pt', 'ru'],
-                    'it': ['en', 'de', 'fr', 'es', 'nl', 'pl', 'pt', 'ru'],
-                    'nl': ['en', 'de', 'fr', 'es', 'it', 'pl', 'pt', 'ru'],
-                    'pl': ['en', 'de', 'fr', 'es', 'it', 'nl', 'pt', 'ru'],
-                    'pt': ['en', 'de', 'fr', 'es', 'it', 'nl', 'pl', 'ru'],
-                    'ru': ['en', 'de', 'fr', 'es', 'it', 'nl', 'pl', 'pt']
-                },
-                'Yandex': True  # Yandex supports all language pairs
-            }
-
-            if translator == 'DeepL':
-                is_supported = (
-                    source_lang in supported_pairs['DeepL'] and 
-                    target_lang in supported_pairs['DeepL'][source_lang]
-                )
-            else:
-                is_supported = supported_pairs[translator]
-
-            self.translator_warning.setVisible(not is_supported)
-            return is_supported
-
-        except Exception as e:
-            logger.error(f"Error checking translator support: {str(e)}")
-            self.translator_warning.show()
-            return False
 
     def check_for_updates(self):
         """Check for application updates."""
