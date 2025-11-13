@@ -90,23 +90,29 @@ class TranslationCache:
 class RateLimiter:
     """Rate limiter for API calls."""
     
-    def __init__(self, max_calls: int, time_window: int):
-        self.max_calls = max_calls
-        self.time_window = time_window  # in seconds
+    def __init__(self, max_calls: Optional[int], time_window: Optional[int]):
+        self.max_calls = max_calls  # None means unlimited
+        self.time_window = time_window  # in seconds, ignored when max_calls is None
         self.calls: List[float] = []
         self.lock = threading.Lock()
         
     def can_make_request(self) -> bool:
         """Check if a new request can be made."""
         with self.lock:
+            if self.max_calls is None:
+                return True
+
             now = time.time()
-            # Remove old calls
-            self.calls = [t for t in self.calls if now - t < self.time_window]
+            # Remove old calls when a time window is defined
+            if self.time_window is not None:
+                self.calls = [t for t in self.calls if now - t < self.time_window]
             return len(self.calls) < self.max_calls
             
     def add_request(self):
         """Record a new request."""
         with self.lock:
+            if self.max_calls is None:
+                return
             self.calls.append(time.time())
 
 class TranslationWindow(QMainWindow):
@@ -125,8 +131,8 @@ class TranslationWindow(QMainWindow):
         self.settings = settings
         
         # Initialize translation cache and rate limiter
-        self.translation_cache = TranslationCache(max_size=None, expiration_minutes=20)  # Unlimited cache with 20min expiration
-        self.rate_limiter = RateLimiter(max_calls=1000, time_window=86400)  # 1000 calls per day
+        self.translation_cache = TranslationCache(max_size=None, expiration_minutes=1)  # Unlimited cache with 1min expiration
+        self.rate_limiter = RateLimiter(max_calls=None, time_window=None)  # Unlimited requests
         
         # Set minimum size
         self.setMinimumSize(300, 200)
@@ -284,8 +290,8 @@ class TranslationWindow(QMainWindow):
         self.is_resizing = False
         self.resize_start_pos = None
         self.resize_start_size = None
-        self.min_width = 200
-        self.min_height = 100
+        self.min_width = 780
+        self.min_height = 320
         self.resize_timer = QTimer()
         self.resize_timer.setInterval(16)
         self.resize_timer.timeout.connect(self.update_resize)
@@ -306,6 +312,7 @@ class TranslationWindow(QMainWindow):
         self.current_interval = self.min_interval
         self.consecutive_empty_frames = 0
         self.is_capturing = False
+        self.was_capturing_before_resize = False
         
         # Frame change detection variables
         self.last_frame_hash = None
@@ -696,6 +703,9 @@ class TranslationWindow(QMainWindow):
             self.resize_start_pos = event.globalPos()
             self.resize_start_size = self.size()
             self.setCursor(Qt.SizeFDiagCursor)
+            self.was_capturing_before_resize = self.is_capturing
+            if self.is_capturing:
+                self.toggle_capture()
             self.resize_timer.start()
 
     def update_resize(self):
@@ -737,6 +747,13 @@ class TranslationWindow(QMainWindow):
         content_width = new_width - 40
         self.name_label.setFixedWidth(content_width)
         self.dialogue_label.setFixedWidth(content_width)
+        frame_geom = self.frameGeometry()
+        self.region = (
+            frame_geom.x(),
+            frame_geom.y(),
+            frame_geom.width(),
+            frame_geom.height()
+        )
 
     def mousePressEvent(self, event):
         """Handle mouse press for dragging."""
@@ -788,4 +805,39 @@ class TranslationWindow(QMainWindow):
             if self.is_resizing:
                 self.is_resizing = False
                 self.resize_timer.stop()
+                frame_geom = self.frameGeometry()
+                self.region = (
+                    frame_geom.x(),
+                    frame_geom.y(),
+                    frame_geom.width(),
+                    frame_geom.height()
+                )
+                if self.config_manager and self.window_id:
+                    try:
+                        self.config_manager.set_global_setting(
+                            f'window_{self.window_id}_size',
+                            f"{frame_geom.width()},{frame_geom.height()}"
+                        )
+                        self.config_manager.set_global_setting(
+                            f'window_{self.window_id}_pos',
+                            f"{frame_geom.x()},{frame_geom.y()}"
+                        )
+                    except Exception as e:
+                        logger.error(f"Error saving window size for window {self.window_id}: {e}")
+                if hasattr(self, 'area_id') and self.area_id and self.config_manager:
+                    try:
+                        self.config_manager.save_area(
+                            self.area_id,
+                            frame_geom.x(),
+                            frame_geom.y(),
+                            frame_geom.width(),
+                            frame_geom.height()
+                        )
+                    except Exception as e:
+                        logger.error(f"Error saving area {self.area_id} after resize: {e}")
+                if self.was_capturing_before_resize and not self.is_capturing:
+                    self.toggle_capture()
+                self.was_capturing_before_resize = False
+            else:
+                self.was_capturing_before_resize = False
             self.setCursor(Qt.ArrowCursor)

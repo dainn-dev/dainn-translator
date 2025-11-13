@@ -20,12 +20,12 @@ logger = logging.getLogger(__name__)
 class TextProcessor:
     """Handle text translation and history logging."""
     
-    def __init__(self, translate_client: Optional[translate.Client], vision_client: Optional[vision.ImageAnnotatorClient] = None, cache_size: int = 1000000):
+    def __init__(self, translate_client: Optional[translate.Client], vision_client: Optional[vision.ImageAnnotatorClient] = None, cache_size: int = None):
         logger.info("Initializing TextProcessor...")
         self.translate_client = translate_client
         self.vision_client = vision_client
         self.translation_cache = OrderedDict()
-        self.max_cache_size = cache_size  # Set to a very large number
+        self.max_cache_size = cache_size  # None means unlimited
         self.api_error_count = 0
         self.max_retries = 3
         self.backoff_factor = 1.5
@@ -88,8 +88,8 @@ class TextProcessor:
             translated_text = translation['translatedText']
             self.increment_translation_api_calls()
 
-            # Cache the result
-            if len(self.translation_cache) >= self.max_cache_size:
+            # Cache the result (no size limit if max_cache_size is None)
+            if self.max_cache_size is not None and len(self.translation_cache) >= self.max_cache_size:
                 self.translation_cache.popitem(last=False)
             self.translation_cache[cache_key] = translated_text
             
