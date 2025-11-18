@@ -30,7 +30,7 @@ class TranslationCache:
         # Start the cleanup timer
         self.cleanup_timer = QTimer()
         self.cleanup_timer.timeout.connect(self.cleanup_expired_entries)
-        self.cleanup_timer.start(60000)  # Check every minute
+        self.cleanup_timer.start(30000)  # Check every 30 seconds
         
     def get_key(self, text: str, source_lang: str, target_lang: str) -> str:
         """Generate a cache key from text and language pair."""
@@ -131,7 +131,7 @@ class TranslationWindow(QMainWindow):
         self.settings = settings
         
         # Initialize translation cache and rate limiter
-        self.translation_cache = TranslationCache(max_size=None, expiration_minutes=1)  # Unlimited cache with 1min expiration
+        self.translation_cache = TranslationCache(max_size=None, expiration_minutes=10/60)  # Unlimited cache with 10s expiration
         self.rate_limiter = RateLimiter(max_calls=None, time_window=None)  # Unlimited requests
         
         # Set minimum size
@@ -229,6 +229,16 @@ class TranslationWindow(QMainWindow):
         self.close_button.clicked.connect(self.close_program)
         self.close_button.raise_()
 
+        # Toggle UI visibility button (fixed near close button)
+        self.toggle_ui_button = QPushButton("👁", self)
+        self.toggle_ui_button.setFixedSize(24, 24)
+        self.toggle_ui_button.setStyleSheet(
+            f"QPushButton {{ background-color: rgba(255,255,255,40); color: #ffff00; border: 1px solid #ffff00; border-radius: 12px; }}"
+            f"QPushButton:hover {{ background-color: rgba(255,255,255,100); color: #ffffff; }}"
+        )
+        self.toggle_ui_button.clicked.connect(self.toggle_ui_visibility)
+        self.toggle_ui_button.raise_()
+
         # Content area with scroll
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
@@ -290,8 +300,9 @@ class TranslationWindow(QMainWindow):
         self.is_resizing = False
         self.resize_start_pos = None
         self.resize_start_size = None
-        self.min_width = 780
-        self.min_height = 320
+        self.min_width = 100
+        self.min_height = 50
+        self.ui_visible = True  # Track UI visibility state
         self.resize_timer = QTimer()
         self.resize_timer.setInterval(16)
         self.resize_timer.timeout.connect(self.update_resize)
@@ -368,7 +379,12 @@ class TranslationWindow(QMainWindow):
         self.capture_button.move(15, 15)
         
         # Position close button in top-right corner
-        self.close_button.move(self.width() - self.close_button.width() - 15, 15)
+        close_x = self.width() - self.close_button.width() - 15
+        self.close_button.move(close_x, 15)
+        
+        # Position toggle UI button next to close button (to the left of it)
+        toggle_x = close_x - self.toggle_ui_button.width() - 8  # 8px spacing between buttons
+        self.toggle_ui_button.move(toggle_x, 15)
         
         # Position resize button in bottom-right corner
         self.resize_button.move(
@@ -392,6 +408,26 @@ class TranslationWindow(QMainWindow):
         # Update request counter when window is shown
         if self.text_processor:
             self.vision_counter_label.setText(f"Vision API: {self.text_processor.vision_api_calls_today} requests")
+
+    def toggle_ui_visibility(self):
+        """Toggle visibility of UI elements, keeping translated text and close button visible."""
+        self.ui_visible = not self.ui_visible
+        
+        # Toggle visibility of buttons and labels (but keep close button and translated text visible)
+        self.capture_button.setVisible(self.ui_visible)
+        self.resize_button.setVisible(self.ui_visible)
+        self.top_bar_container.setVisible(self.ui_visible)
+        # Note: close_button and content_widget remain visible always
+        
+        # Update toggle button icon to indicate state
+        if self.ui_visible:
+            self.toggle_ui_button.setText("👁")
+            self.toggle_ui_button.setToolTip("Hide UI")
+        else:
+            self.toggle_ui_button.setText("👁‍🗨")
+            self.toggle_ui_button.setToolTip("Show UI")
+        
+        logger.info(f"UI visibility toggled: {self.ui_visible}")
 
     def close_program(self):
         """Close the translation window."""
@@ -761,7 +797,9 @@ class TranslationWindow(QMainWindow):
             pos = event.pos()
             close_rect = self.close_button.geometry()
             resize_rect = self.resize_button.geometry()
-            if close_rect.contains(pos) or resize_rect.contains(pos):
+            capture_rect = self.capture_button.geometry()
+            toggle_rect = self.toggle_ui_button.geometry()
+            if close_rect.contains(pos) or resize_rect.contains(pos) or capture_rect.contains(pos) or toggle_rect.contains(pos):
                 return
             self.is_dragging = True
             self.drag_start_pos = event.globalPos() - self.pos()

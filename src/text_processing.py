@@ -29,7 +29,7 @@ class TextProcessor:
         self.api_error_count = 0
         self.max_retries = 3
         self.backoff_factor = 1.5
-        self.api_quota_limit = 1000
+        self.api_quota_limit = None  # None means unlimited
         self.translation_api_calls_today = 0
         self.vision_api_calls_today = 0
         self.last_quota_reset = datetime.now().date()
@@ -128,6 +128,9 @@ class TextProcessor:
     def check_api_quota(self) -> bool:
         """Check if API quota is available."""
         self.reset_quota_if_new_day()
+        # None means unlimited, always return True
+        if self.api_quota_limit is None:
+            return True
         return self.translation_api_calls_today < self.api_quota_limit
 
     def increment_translation_api_calls(self) -> None:
