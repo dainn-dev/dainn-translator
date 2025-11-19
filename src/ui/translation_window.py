@@ -1,13 +1,24 @@
 import html
 import pyautogui
 import numpy as np
-from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QPushButton, QLabel, QApplication, QHBoxLayout
-from PyQt5.QtCore import Qt, QTimer, QPoint
-from PyQt5.QtGui import QFont, QColor, QCursor
+from PyQt5.QtWidgets import (
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QPushButton,
+    QLabel,
+    QApplication,
+    QHBoxLayout,
+    QShortcut
+)
+from PyQt5.QtCore import Qt, QTimer, QPoint, QCoreApplication, QAbstractNativeEventFilter
+from PyQt5.QtGui import QFont, QColor, QCursor, QKeySequence
 from src.config_manager import ConfigManager
 from src.text_processing import TextProcessor
 from typing import Tuple, Optional, Callable, Dict, List
 import os
+import ctypes
+from ctypes import wintypes
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from collections import OrderedDict
@@ -15,8 +26,45 @@ import time
 import threading
 import hashlib
 import cv2
+try:
+    import keyboard
+except ImportError:
+    keyboard = None
 
 logger = logging.getLogger(__name__)
+
+IS_WINDOWS = os.name == 'nt'
+WM_HOTKEY = 0x0312
+MOD_CONTROL = 0x0002
+VK_1 = 0x31
+HOTKEY_ID_BASE = 0xA000
+
+if IS_WINDOWS:
+
+    class WindowsHotkeyFilter(QAbstractNativeEventFilter):
+        """Event filter to capture native WM_HOTKEY events."""
+
+        def __init__(self, callback: Callable):
+            super().__init__()
+            self.callback = callback
+            self.hotkey_id: Optional[int] = None
+
+        def set_hotkey_id(self, hotkey_id: Optional[int]):
+            self.hotkey_id = hotkey_id
+
+        def nativeEventFilter(self, event_type, message):
+            if self.hotkey_id is None:
+                return False, 0
+            if event_type == "windows_generic_MSG":
+                try:
+                    msg = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG)).contents
+                except (ValueError, TypeError):
+                    return False, 0
+                if msg.message == WM_HOTKEY and msg.wParam == self.hotkey_id:
+                    QTimer.singleShot(0, self.callback)
+                    return True, 0
+            return False, 0
+
 
 class TranslationCache:
     """Cache for translations to avoid redundant API calls."""
@@ -118,6 +166,8 @@ class RateLimiter:
 class TranslationWindow(QMainWindow):
     """Window to display real-time translations."""
     
+    _global_hotkey_counter = 0
+
     def __init__(self, on_select_region: Callable, settings: Dict, config_manager: ConfigManager, 
                  window_id: Optional[str] = None, text_processor: Optional[TextProcessor] = None):
         super().__init__()
@@ -129,6 +179,8 @@ class TranslationWindow(QMainWindow):
         self.window_id = window_id
         self.text_processor = text_processor
         self.settings = settings
+        self.global_hotkey_id: Optional[int] = None
+        self.global_hotkey_filter: Optional['WindowsHotkeyFilter'] = None
         
         # Initialize translation cache and rate limiter
         self.translation_cache = TranslationCache(max_size=None, expiration_minutes=10/60)  # Unlimited cache with 10s expiration
@@ -140,6 +192,7 @@ class TranslationWindow(QMainWindow):
         # Initialize UI
         self.init_ui()
         self.init_translation()
+        self.init_shortcuts()
 
     def init_ui(self):
         """Initialize the user interface."""
@@ -333,6 +386,60 @@ class TranslationWindow(QMainWindow):
         self.frame_change_threshold = 0.95  # Hash similarity threshold
         self.min_change_threshold = 0.85  # Minimum similarity to consider frames different
 
+    def init_shortcuts(self):
+        """Register application shortcuts."""
+        self.toggle_shortcut = QShortcut(QKeySequence("Ctrl+1"), self)
+        self.toggle_shortcut.setContext(Qt.ApplicationShortcut)
+        self.toggle_shortcut.activated.connect(self.toggle_all_operations)
+        self.register_global_hotkey()
+
+    def register_global_hotkey(self):
+        """Register a system-wide hotkey using the native Windows API."""
+        if not IS_WINDOWS:
+            logger.info("Global hotkey registration is only supported on Windows")
+            return
+        if self.global_hotkey_id is not None:
+            logger.info("Global hotkey already registered")
+            return
+        app = QCoreApplication.instance()
+        if app is None:
+            logger.warning("No QCoreApplication instance; cannot register global hotkey")
+            return
+        if self.global_hotkey_filter is None:
+            self.global_hotkey_filter = WindowsHotkeyFilter(self.on_global_hotkey_triggered)
+            app.installNativeEventFilter(self.global_hotkey_filter)
+        TranslationWindow._global_hotkey_counter += 1
+        self.global_hotkey_id = HOTKEY_ID_BASE + TranslationWindow._global_hotkey_counter
+        user32 = ctypes.windll.user32
+        if not user32.RegisterHotKey(None, self.global_hotkey_id, MOD_CONTROL, VK_1):
+            error_code = ctypes.windll.kernel32.GetLastError()
+            logger.error(f"Failed to register global hotkey Ctrl+1 (error {error_code})")
+            self.global_hotkey_id = None
+            return
+        if self.global_hotkey_filter:
+            self.global_hotkey_filter.set_hotkey_id(self.global_hotkey_id)
+        logger.info("Global hotkey Ctrl+1 registered")
+
+    def unregister_global_hotkey(self):
+        """Remove the system-wide hotkey."""
+        if not IS_WINDOWS:
+            return
+        if self.global_hotkey_id is not None:
+            user32 = ctypes.windll.user32
+            user32.UnregisterHotKey(None, self.global_hotkey_id)
+            self.global_hotkey_id = None
+        if self.global_hotkey_filter is not None:
+            app = QCoreApplication.instance()
+            if app:
+                app.removeNativeEventFilter(self.global_hotkey_filter)
+            self.global_hotkey_filter = None
+            logger.info("Global hotkey listener removed")
+
+    def on_global_hotkey_triggered(self):
+        """Handle WM_HOTKEY events and toggle operations on the UI thread."""
+        logger.info("Global hotkey Ctrl+1 triggered")
+        self.toggle_all_operations()
+
     def get_frame_hash(self, frame: np.ndarray) -> str:
         """Generate a hash for frame change detection."""
         try:
@@ -444,6 +551,7 @@ class TranslationWindow(QMainWindow):
                 self.resize_timer.stop()
             if hasattr(self, 'translation_cache') and hasattr(self.translation_cache, 'cleanup_timer'):
                 self.translation_cache.cleanup_timer.stop()
+            self.unregister_global_hotkey()
             
             # Call the main window's close handler if available
             if hasattr(self, 'area_id') and hasattr(self, 'main_window_close_handler'):
@@ -472,6 +580,7 @@ class TranslationWindow(QMainWindow):
                 self.resize_timer.stop()
             if hasattr(self, 'translation_cache') and hasattr(self.translation_cache, 'cleanup_timer'):
                 self.translation_cache.cleanup_timer.stop()
+            self.unregister_global_hotkey()
             
             # Accept the close event
             event.accept()
@@ -500,6 +609,20 @@ class TranslationWindow(QMainWindow):
             )
             self.running = False
             self.timer.stop()
+
+    def toggle_all_operations(self):
+        """Start/stop all translation activity via global shortcut."""
+        logger.info("Global toggle shortcut triggered")
+        if self.is_capturing:
+            self.toggle_capture()
+            self.processing = False
+            self.consecutive_same_frames = 0
+            self.consecutive_empty_frames = 0
+        else:
+            if not self.region:
+                logger.warning("Cannot start capturing without a selected region")
+                return
+            self.toggle_capture()
 
     def continuous_translate(self):
         """Continuously translate screen region text with optimizations."""
