@@ -1,18 +1,9 @@
 import os
-import sys
 import json
 from PyQt5.QtWidgets import QMessageBox
 import logging
 
 logger = logging.getLogger(__name__)
-
-def get_resource_path(relative_path: str) -> str:
-    """Get absolute path to resource, works for dev and for PyInstaller."""
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
 
 def validate_credentials(file_path: str) -> bool:
     """

@@ -26,18 +26,38 @@ import time
 import threading
 import hashlib
 import cv2
-try:
-    import keyboard
-except ImportError:
-    keyboard = None
 
 logger = logging.getLogger(__name__)
 
 IS_WINDOWS = os.name == 'nt'
 WM_HOTKEY = 0x0312
 MOD_CONTROL = 0x0002
-VK_1 = 0x31
+MOD_SHIFT = 0x0004
+MOD_ALT = 0x0001
 HOTKEY_ID_BASE = 0xA000
+
+# Virtual key code mapping
+VK_CODES = {
+    # Numbers
+    '0': 0x30, '1': 0x31, '2': 0x32, '3': 0x33, '4': 0x34,
+    '5': 0x35, '6': 0x36, '7': 0x37, '8': 0x38, '9': 0x39,
+    # Letters
+    'A': 0x41, 'B': 0x42, 'C': 0x43, 'D': 0x44, 'E': 0x45,
+    'F': 0x46, 'G': 0x47, 'H': 0x48, 'I': 0x49, 'J': 0x4A,
+    'K': 0x4B, 'L': 0x4C, 'M': 0x4D, 'N': 0x4E, 'O': 0x4F,
+    'P': 0x50, 'Q': 0x51, 'R': 0x52, 'S': 0x53, 'T': 0x54,
+    'U': 0x55, 'V': 0x56, 'W': 0x57, 'X': 0x58, 'Y': 0x59, 'Z': 0x5A,
+    # Function keys
+    'F1': 0x70, 'F2': 0x71, 'F3': 0x72, 'F4': 0x73, 'F5': 0x74, 'F6': 0x75,
+    'F7': 0x76, 'F8': 0x77, 'F9': 0x78, 'F10': 0x79, 'F11': 0x7A, 'F12': 0x7B,
+    # Special keys
+    'SPACE': 0x20, 'PAGEUP': 0x21, 'PAGEDOWN': 0x22, 'END': 0x23, 'HOME': 0x24,
+    'LEFT': 0x25, 'UP': 0x26, 'RIGHT': 0x27, 'DOWN': 0x28,
+    'INSERT': 0x2D, 'DELETE': 0x2E,
+    # Symbol keys
+    '`': 0xC0, '-': 0xBD, '=': 0xBB, '[': 0xDB, ']': 0xDD,
+    '\\': 0xDC, ';': 0xBA, "'": 0xDE, ',': 0xBC, '.': 0xBE, '/': 0xBF,
+}
 
 if IS_WINDOWS:
 
@@ -378,6 +398,10 @@ class TranslationWindow(QMainWindow):
         self.is_capturing = False
         self.was_capturing_before_resize = False
         
+        # Auto-pause feature variables
+        self.consecutive_no_text_captures = 0
+        self.auto_paused = False
+        
         # Frame change detection variables
         self.last_frame_hash = None
         self.last_frame = None
@@ -388,10 +412,45 @@ class TranslationWindow(QMainWindow):
 
     def init_shortcuts(self):
         """Register application shortcuts."""
-        self.toggle_shortcut = QShortcut(QKeySequence("Ctrl+1"), self)
+        hotkey = self.settings.get('toggle_hotkey', 'Ctrl+1')
+        self.toggle_shortcut = QShortcut(QKeySequence(hotkey), self)
         self.toggle_shortcut.setContext(Qt.ApplicationShortcut)
         self.toggle_shortcut.activated.connect(self.toggle_all_operations)
         self.register_global_hotkey()
+    
+    def parse_hotkey(self, hotkey: str) -> Tuple[int, int]:
+        """Parse hotkey string and return (modifier, virtual_key) tuple."""
+        parts = hotkey.split('+')
+        modifier = 0
+        key = None
+        
+        # Parse each part
+        for part in parts:
+            part_upper = part.strip().upper()
+            
+            # Check for modifiers
+            if part_upper == 'CTRL':
+                modifier |= MOD_CONTROL
+            elif part_upper == 'SHIFT':
+                modifier |= MOD_SHIFT
+            elif part_upper == 'ALT':
+                modifier |= MOD_ALT
+            else:
+                # This should be the key
+                # Try to find it in VK_CODES (check uppercase for letters)
+                if part_upper in VK_CODES:
+                    key = VK_CODES[part_upper]
+                elif part in VK_CODES:  # For symbols that might be case-sensitive
+                    key = VK_CODES[part]
+                else:
+                    logger.warning(f"Unknown key in hotkey: {part}")
+        
+        # Default to VK_1 if no key was found
+        if key is None:
+            logger.warning(f"No valid key found in hotkey '{hotkey}', defaulting to '1'")
+            key = VK_CODES['1']
+        
+        return (modifier, key)
 
     def register_global_hotkey(self):
         """Register a system-wide hotkey using the native Windows API."""
@@ -411,14 +470,19 @@ class TranslationWindow(QMainWindow):
         TranslationWindow._global_hotkey_counter += 1
         self.global_hotkey_id = HOTKEY_ID_BASE + TranslationWindow._global_hotkey_counter
         user32 = ctypes.windll.user32
-        if not user32.RegisterHotKey(None, self.global_hotkey_id, MOD_CONTROL, VK_1):
+        
+        # Parse the hotkey from settings
+        hotkey = self.settings.get('toggle_hotkey', 'Ctrl+1')
+        modifier, vk_key = self.parse_hotkey(hotkey)
+        
+        if not user32.RegisterHotKey(None, self.global_hotkey_id, modifier, vk_key):
             error_code = ctypes.windll.kernel32.GetLastError()
-            logger.error(f"Failed to register global hotkey Ctrl+1 (error {error_code})")
+            logger.error(f"Failed to register global hotkey {hotkey} (error {error_code})")
             self.global_hotkey_id = None
             return
         if self.global_hotkey_filter:
             self.global_hotkey_filter.set_hotkey_id(self.global_hotkey_id)
-        logger.info("Global hotkey Ctrl+1 registered")
+        logger.info(f"Global hotkey {hotkey} registered")
 
     def unregister_global_hotkey(self):
         """Remove the system-wide hotkey."""
@@ -437,7 +501,8 @@ class TranslationWindow(QMainWindow):
 
     def on_global_hotkey_triggered(self):
         """Handle WM_HOTKEY events and toggle operations on the UI thread."""
-        logger.info("Global hotkey Ctrl+1 triggered")
+        hotkey = self.settings.get('toggle_hotkey', 'Ctrl+1')
+        logger.info(f"Global hotkey {hotkey} triggered")
         self.toggle_all_operations()
 
     def get_frame_hash(self, frame: np.ndarray) -> str:
@@ -593,22 +658,53 @@ class TranslationWindow(QMainWindow):
     def toggle_capture(self):
         """Toggle the capture state."""
         self.is_capturing = not self.is_capturing
+        
+        # Reset auto-pause state when manually toggling
+        if self.is_capturing:
+            self.auto_paused = False
+            self.consecutive_no_text_captures = 0
+        
+        self.update_capture_button_state()
+        
+        if self.is_capturing:
+            self.running = True
+            self.timer.start(int(self.current_interval))
+        else:
+            self.running = False
+            self.timer.stop()
+    
+    def update_capture_button_state(self):
+        """Update capture button appearance based on state."""
         if self.is_capturing:
             self.capture_button.setText("⏸")
             self.capture_button.setStyleSheet(
                 f"QPushButton {{ background-color: rgba(255,255,255,40); color: #ff0000; border: 1px solid #ff0000; border-radius: 12px; }}"
                 f"QPushButton:hover {{ background-color: rgba(255,255,255,100); color: #ffffff; }}"
             )
-            self.running = True
-            self.timer.start(int(self.current_interval))
+            logger.info("Screen capture enabled")
         else:
             self.capture_button.setText("▶")
             self.capture_button.setStyleSheet(
                 f"QPushButton {{ background-color: rgba(255,255,255,40); color: #00ff00; border: 1px solid #00ff00; border-radius: 12px; }}"
                 f"QPushButton:hover {{ background-color: rgba(255,255,255,100); color: #ffffff; }}"
             )
-            self.running = False
-            self.timer.stop()
+            logger.info("Screen capture disabled")
+    
+    def update_auto_pause_status(self):
+        """Update UI to reflect auto-pause status."""
+        if self.auto_paused:
+            # Show auto-pause indicator
+            self.capture_button.setText("💤")
+            self.capture_button.setStyleSheet(
+                f"QPushButton {{ background-color: rgba(100,100,100,200); color: white; border: 1px solid #666666; border-radius: 12px; font-size: 10pt; }}"
+                f"QPushButton:hover {{ background-color: rgba(100,100,100,255); }}"
+            )
+            # Update name label to show status
+            if hasattr(self, 'name_label'):
+                self.name_label.setText("Auto-Paused (No text detected)")
+        else:
+            # Resume normal state
+            self.update_capture_button_state()
 
     def toggle_all_operations(self):
         """Start/stop all translation activity via global shortcut."""
@@ -618,6 +714,8 @@ class TranslationWindow(QMainWindow):
             self.processing = False
             self.consecutive_same_frames = 0
             self.consecutive_empty_frames = 0
+            self.consecutive_no_text_captures = 0
+            self.auto_paused = False
         else:
             if not self.region:
                 logger.warning("Cannot start capturing without a selected region")
@@ -678,8 +776,34 @@ class TranslationWindow(QMainWindow):
             text = self.text_processor.detect_text(screenshot)
             
             # Update Vision API counter
-            if text and not self.text_processor.use_local_ocr:
-                self.vision_counter_label.setText(f"Vision API: {self.text_processor.vision_api_calls_today} requests")
+            self.vision_counter_label.setText(f"Vision API: {self.text_processor.vision_api_calls_today} requests")
+            
+            # Check for auto-pause feature
+            auto_pause_enabled = self.settings.get('auto_pause_enabled', False)
+            auto_pause_threshold = self.settings.get('auto_pause_threshold', 5)
+            
+            if not text or text.strip() == "":
+                # No text detected
+                self.consecutive_no_text_captures += 1
+                
+                # Check if we should auto-pause
+                if auto_pause_enabled and self.consecutive_no_text_captures >= auto_pause_threshold:
+                    if not self.auto_paused:
+                        self.auto_paused = True
+                        self.is_capturing = False
+                        logger.info(f"Auto-paused after {self.consecutive_no_text_captures} captures without text")
+                        # Update UI to show paused state
+                        self.update_auto_pause_status()
+                    self.processing = False
+                    return
+            else:
+                # Text detected, reset counter and resume if auto-paused
+                if self.auto_paused:
+                    self.auto_paused = False
+                    self.is_capturing = True
+                    logger.info("Auto-resuming - text detected")
+                    self.update_auto_pause_status()
+                self.consecutive_no_text_captures = 0
             
             # Skip if text is unchanged
             if text == self.last_text:
@@ -814,7 +938,23 @@ class TranslationWindow(QMainWindow):
 
     def apply_settings(self, settings: Dict):
         """Apply new settings to the window."""
+        # Check if hotkey has changed
+        old_hotkey = self.settings.get('toggle_hotkey', 'Ctrl+1')
+        new_hotkey = settings.get('toggle_hotkey', 'Ctrl+1')
+        hotkey_changed = old_hotkey != new_hotkey
+        
         self.settings.update(settings)
+        
+        # Update hotkey if it changed
+        if hotkey_changed:
+            logger.info(f"Hotkey changed from {old_hotkey} to {new_hotkey}, updating shortcuts")
+            # Unregister old global hotkey
+            self.unregister_global_hotkey()
+            # Update QShortcut
+            self.toggle_shortcut.setKey(QKeySequence(new_hotkey))
+            # Register new global hotkey
+            self.register_global_hotkey()
+        
         font = QFont(self.settings['font_family'], int(self.settings['font_size']))
         if self.settings['font_style'] == 'bold':
             font.setBold(True)

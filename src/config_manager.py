@@ -46,7 +46,10 @@ class ConfigManager:
             'dialogue_color': '#00ff00',
             'background_color': '#000000',
             'opacity': '0.85',
-            'credentials_path': ''
+            'credentials_path': '',
+            'toggle_hotkey': 'Ctrl+1',
+            'auto_pause_enabled': 'False',
+            'auto_pause_threshold': '5'
         }
 
     def create_languages_section(self) -> None:
@@ -240,4 +243,32 @@ class ConfigManager:
             return areas
         except Exception as e:
             logger.error(f"Error loading areas: {str(e)}", exc_info=True)
-            return {} 
+            return {}
+    
+    def get_toggle_hotkey(self) -> str:
+        """Get the toggle hotkey"""
+        return self.get_global_setting('toggle_hotkey', 'Ctrl+1')
+    
+    def set_toggle_hotkey(self, hotkey: str) -> None:
+        """Set the toggle hotkey"""
+        self.set_global_setting('toggle_hotkey', hotkey)
+    
+    def get_auto_pause_enabled(self) -> bool:
+        """Get auto pause enabled status"""
+        value = self.get_global_setting('auto_pause_enabled', 'False')
+        return value.lower() in ('true', '1', 'yes')
+    
+    def set_auto_pause_enabled(self, enabled: bool) -> None:
+        """Set auto pause enabled status"""
+        self.set_global_setting('auto_pause_enabled', str(enabled))
+    
+    def get_auto_pause_threshold(self) -> int:
+        """Get auto pause threshold"""
+        try:
+            return int(self.get_global_setting('auto_pause_threshold', '5'))
+        except ValueError:
+            return 5
+    
+    def set_auto_pause_threshold(self, threshold: int) -> None:
+        """Set auto pause threshold"""
+        self.set_global_setting('auto_pause_threshold', str(threshold)) 

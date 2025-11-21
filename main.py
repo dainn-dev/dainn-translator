@@ -8,9 +8,6 @@ from src.ui.utils import validate_credentials
 from src.config_manager import ConfigManager
 
 # Configure logging
-import os
-import pathlib
-
 # Create logs directory in AppData if it doesn't exist
 appdata_path = os.path.join(os.getenv('APPDATA'), 'DainnScreenTranslator')
 logs_path = os.path.join(appdata_path, 'logs')

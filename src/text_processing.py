@@ -1,8 +1,6 @@
 from typing import Dict, List, Optional, Tuple
 import os
 import json
-import time
-import html
 from datetime import datetime
 from google.cloud import translate_v2 as translate
 from google.cloud import vision
@@ -10,9 +8,6 @@ import numpy as np
 from collections import OrderedDict
 from src.config_manager import ConfigManager
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
-import platform
 import cv2
 
 logger = logging.getLogger(__name__)
@@ -26,17 +21,12 @@ class TextProcessor:
         self.vision_client = vision_client
         self.translation_cache = OrderedDict()
         self.max_cache_size = cache_size  # None means unlimited
-        self.api_error_count = 0
-        self.max_retries = 3
-        self.backoff_factor = 1.5
         self.api_quota_limit = None  # None means unlimited
         self.translation_api_calls_today = 0
         self.vision_api_calls_today = 0
         self.last_quota_reset = datetime.now().date()
         self.config_manager = ConfigManager()
         self.translation_history: List[Dict] = []
-        self.executor = ThreadPoolExecutor(max_workers=3)
-        self.use_local_ocr = False  # We're using Google Vision API, so this is always False
         logger.info("TextProcessor initialization complete.")
 
     def detect_text(self, image: np.ndarray) -> str:
@@ -105,7 +95,6 @@ class TextProcessor:
             return translated_text
         except Exception as e:
             logger.error(f"Translation error: {str(e)}", exc_info=True)
-            self.api_error_count += 1
             return text
 
     def _save_translation_history(self):

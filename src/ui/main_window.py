@@ -6,20 +6,116 @@ import time
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGroupBox, QLabel,
     QPushButton, QComboBox, QLineEdit, QTreeWidget, QTreeWidgetItem,
-    QFileDialog, QColorDialog, QMessageBox, QApplication, QSpinBox, QDoubleSpinBox,
-    QScrollArea, QFrame, QCheckBox
+    QFileDialog, QColorDialog, QMessageBox, QApplication, QCheckBox, QSpinBox
 )
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QIcon, QColor
+from PyQt5.QtCore import Qt, QTimer, QEvent
+from PyQt5.QtGui import QIcon, QColor, QKeySequence
 from src.config_manager import ConfigManager
 from src.screen_capture import capture_screen_region
 from src.ui.translation_window import TranslationWindow
-from src.ui.utils import get_resource_path, validate_credentials, show_error_message
+from src.ui.utils import validate_credentials, show_error_message
 from src.text_processing import TextProcessor
-from src.translator_service import TranslatorService
 from src.version_checker import VersionChecker
 
 logger = logging.getLogger(__name__)
+
+class HotkeyInput(QLineEdit):
+    """Custom QLineEdit for capturing keyboard shortcuts."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setPlaceholderText("Press a key combination...")
+        self.setReadOnly(True)
+        self.installEventFilter(self)
+        self.setStyleSheet("""
+            QLineEdit {
+                padding: 5px;
+                border: 2px solid #2196F3;
+                border-radius: 3px;
+                background-color: white;
+            }
+            QLineEdit:focus {
+                border: 2px solid #1976D2;
+                background-color: #f0f8ff;
+            }
+        """)
+    
+    def eventFilter(self, obj, event):
+        """Filter key press events to capture shortcuts."""
+        if obj == self and event.type() == QEvent.KeyPress:
+            key = event.key()
+            modifiers = event.modifiers()
+            
+            # Ignore modifier keys pressed alone
+            if key in (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta):
+                return True
+            
+            # Build the key sequence
+            key_combo = []
+            
+            if modifiers & Qt.ControlModifier:
+                key_combo.append("Ctrl")
+            if modifiers & Qt.ShiftModifier:
+                key_combo.append("Shift")
+            if modifiers & Qt.AltModifier:
+                key_combo.append("Alt")
+            
+            # Convert key to string
+            key_str = self.get_key_string(key)
+            if key_str:
+                key_combo.append(key_str)
+                self.setText("+".join(key_combo))
+            
+            return True
+        
+        return super().eventFilter(obj, event)
+    
+    def get_key_string(self, key):
+        """Convert Qt key code to string representation."""
+        # Number keys
+        if Qt.Key_0 <= key <= Qt.Key_9:
+            return chr(key)
+        # Letter keys
+        elif Qt.Key_A <= key <= Qt.Key_Z:
+            return chr(key)
+        # Function keys
+        elif Qt.Key_F1 <= key <= Qt.Key_F12:
+            return f"F{key - Qt.Key_F1 + 1}"
+        # Special keys
+        special_keys = {
+            Qt.Key_Space: "Space",
+            Qt.Key_Tab: "Tab",
+            Qt.Key_Backspace: "Backspace",
+            Qt.Key_Return: "Return",
+            Qt.Key_Enter: "Enter",
+            Qt.Key_Insert: "Insert",
+            Qt.Key_Delete: "Delete",
+            Qt.Key_Home: "Home",
+            Qt.Key_End: "End",
+            Qt.Key_PageUp: "PageUp",
+            Qt.Key_PageDown: "PageDown",
+            Qt.Key_Left: "Left",
+            Qt.Key_Right: "Right",
+            Qt.Key_Up: "Up",
+            Qt.Key_Down: "Down",
+            Qt.Key_QuoteLeft: "`",
+            Qt.Key_Minus: "-",
+            Qt.Key_Equal: "=",
+            Qt.Key_BracketLeft: "[",
+            Qt.Key_BracketRight: "]",
+            Qt.Key_Backslash: "\\",
+            Qt.Key_Semicolon: ";",
+            Qt.Key_Apostrophe: "'",
+            Qt.Key_Comma: ",",
+            Qt.Key_Period: ".",
+            Qt.Key_Slash: "/",
+        }
+        return special_keys.get(key, None)
+    
+    def focusInEvent(self, event):
+        """Clear text when focused to allow new input."""
+        super().focusInEvent(event)
+        self.selectAll()
 
 class MainWindow(QMainWindow):
     """Main application window for the real-time screen translator."""
@@ -177,6 +273,60 @@ class MainWindow(QMainWindow):
         self.target_lang_combo = QComboBox()
         self.language_layout.addWidget(self.target_lang_combo)
 
+        # Hotkey settings
+        self.hotkey_group = QGroupBox("Hotkey Settings")
+        self.hotkey_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.settings_layout.addWidget(self.hotkey_group)
+        self.hotkey_layout = QHBoxLayout(self.hotkey_group)
+
+        self.hotkey_label = QLabel("Toggle Hotkey:")
+        self.hotkey_layout.addWidget(self.hotkey_label)
+        
+        # Use custom HotkeyInput widget instead of combobox
+        self.hotkey_input = HotkeyInput()
+        self.hotkey_input.setText(self.config_manager.get_toggle_hotkey())
+        self.hotkey_input.textChanged.connect(self.on_hotkey_changed)
+        self.hotkey_layout.addWidget(self.hotkey_input)
+
+        self.hotkey_apply_button = QPushButton("Apply")
+        self.hotkey_apply_button.clicked.connect(self.update_hotkey_setting)
+        self.hotkey_apply_button.setEnabled(False)
+        self.hotkey_layout.addWidget(self.hotkey_apply_button)
+
+        self.hotkey_info_label = QLabel("(Click field and press keys)")
+        self.hotkey_info_label.setStyleSheet("color: #666666; font-size: 9pt;")
+        self.hotkey_layout.addWidget(self.hotkey_info_label)
+        
+        # Store the original hotkey for comparison
+        self.original_hotkey = self.config_manager.get_toggle_hotkey()
+
+        # Auto-pause settings
+        self.auto_pause_group = QGroupBox("Auto-Pause Settings")
+        self.auto_pause_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.settings_layout.addWidget(self.auto_pause_group)
+        self.auto_pause_layout = QHBoxLayout(self.auto_pause_group)
+
+        self.auto_pause_checkbox = QCheckBox("Pause translation after")
+        self.auto_pause_checkbox.setChecked(self.config_manager.get_auto_pause_enabled())
+        self.auto_pause_checkbox.stateChanged.connect(self.update_auto_pause_settings)
+        self.auto_pause_layout.addWidget(self.auto_pause_checkbox)
+
+        self.auto_pause_threshold_spinbox = QSpinBox()
+        self.auto_pause_threshold_spinbox.setMinimum(1)
+        self.auto_pause_threshold_spinbox.setMaximum(100)
+        self.auto_pause_threshold_spinbox.setValue(self.config_manager.get_auto_pause_threshold())
+        self.auto_pause_threshold_spinbox.setFixedWidth(60)
+        self.auto_pause_threshold_spinbox.valueChanged.connect(self.update_auto_pause_settings)
+        self.auto_pause_layout.addWidget(self.auto_pause_threshold_spinbox)
+
+        self.auto_pause_label = QLabel("captures without text")
+        self.auto_pause_layout.addWidget(self.auto_pause_label)
+
+        self.auto_pause_info_label = QLabel("(Saves API calls)")
+        self.auto_pause_info_label.setStyleSheet("color: #666666; font-size: 9pt;")
+        self.auto_pause_layout.addWidget(self.auto_pause_info_label)
+        self.auto_pause_layout.addStretch()
+
         # Credentials settings
         self.credentials_group = QGroupBox("Google Cloud Settings")
         self.credentials_group.setStyleSheet(f"background-color: {self.frame_bg};")
@@ -222,7 +372,7 @@ class MainWindow(QMainWindow):
 
         # Styling buttons
         for btn in [self.add_button, self.delete_button, self.start_button, self.browse_button,
-                    self.name_color_button, self.dialogue_color_button, self.bg_color_button]:
+                    self.name_color_button, self.dialogue_color_button, self.bg_color_button, self.hotkey_apply_button]:
             btn.setStyleSheet(
                 f"QPushButton {{ background-color: {self.button_bg}; color: {self.button_fg}; padding: 5px; }}"
                 f"QPushButton:hover {{ background-color: {self.secondary_color}; }}"
@@ -259,7 +409,7 @@ class MainWindow(QMainWindow):
     def add_area(self):
         """Add a new translation area."""
         self.hide()
-        screenshot, region = capture_screen_region(False)
+        screenshot, region = capture_screen_region()
         if region:
             x, y, w, h = region
             # Get existing area IDs
@@ -388,7 +538,10 @@ class MainWindow(QMainWindow):
                 'target_language': self.language_name_to_code.get(self.target_lang_combo.currentText(), 'vi'),
                 'source_language': self.language_name_to_code.get(self.source_lang_combo.currentText(), 'en'),
                 'background_color': self.bg_color_value,
-                'opacity': self.opacity_edit.text()
+                'opacity': self.opacity_edit.text(),
+                'toggle_hotkey': self.hotkey_input.text() or 'Ctrl+1',
+                'auto_pause_enabled': self.auto_pause_checkbox.isChecked(),
+                'auto_pause_threshold': self.auto_pause_threshold_spinbox.value()
             }
             logger.info(f"Translation settings: {settings}")
             
@@ -419,24 +572,6 @@ class MainWindow(QMainWindow):
             logger.error(f"Error in start_translation: {str(e)}", exc_info=True)
             show_error_message(self, "Error", f"Failed to start translation: {str(e)}")
 
-    def handle_translation_window_close_wrapper(self, event):
-        """Wrapper for handling translation window close events."""
-        try:
-            logger.info("handle_translation_window_close_wrapper called")
-            # Get the sender (the window that's closing)
-            sender = self.sender()
-            logger.info(f"Sender: {sender}")
-            if sender and hasattr(sender, 'area_id'):
-                area_id = sender.area_id
-                logger.info(f"Found area_id: {area_id}")
-                self.handle_translation_window_close(event, area_id)
-            else:
-                logger.warning("No sender or area_id found")
-                event.accept()
-        except Exception as e:
-            logger.error(f"Error in close wrapper: {str(e)}", exc_info=True)
-            event.accept()
-
     def handle_translation_window_close_direct(self, area_id):
         """Handle the closure of a translation window directly (called from close button)."""
         try:
@@ -463,35 +598,6 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             logger.error(f"Error handling translation window close: {str(e)}", exc_info=True)
-
-    def handle_translation_window_close(self, event, area_id):
-        """Handle the closure of a translation window."""
-        try:
-            logger.info(f"handle_translation_window_close called for area_id: {area_id}")
-            logger.info(f"Translation windows before removal: {list(self.translation_windows.keys())}")
-            
-            if area_id in self.translation_windows:
-                window = self.translation_windows[area_id]
-                if hasattr(window, 'running'):
-                    window.running = False
-                if hasattr(window, 'timer') and window.timer:
-                    window.timer.stop()
-                del self.translation_windows[area_id]
-                logger.info(f"Removed translation window for area_id: {area_id}")
-            
-            logger.info(f"Translation windows after removal: {list(self.translation_windows.keys())}")
-            
-            # If no more translation windows are open, re-enable settings
-            if not self.translation_windows:
-                logger.info("No more translation windows, re-enabling settings")
-                self.update_settings_state(enabled=True)  # Explicitly pass True
-            else:
-                logger.info(f"Still have {len(self.translation_windows)} translation windows open")
-            
-            event.accept()
-        except Exception as e:
-            logger.error(f"Error handling translation window close: {str(e)}", exc_info=True)
-            event.accept()
 
     def closeEvent(self, event):
         """Handle window close event."""
@@ -595,6 +701,20 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'target_lang_combo'):
                 self.target_lang_combo.setEnabled(enabled)
             
+            # Hotkey settings
+            if hasattr(self, 'hotkey_input'):
+                self.hotkey_input.setEnabled(enabled)
+            if hasattr(self, 'hotkey_apply_button'):
+                # Apply button should be disabled when settings are disabled OR when no changes are made
+                has_changes = hasattr(self, 'original_hotkey') and self.hotkey_input.text() != self.original_hotkey
+                self.hotkey_apply_button.setEnabled(enabled and has_changes)
+            
+            # Auto-pause settings
+            if hasattr(self, 'auto_pause_checkbox'):
+                self.auto_pause_checkbox.setEnabled(enabled)
+            if hasattr(self, 'auto_pause_threshold_spinbox'):
+                self.auto_pause_threshold_spinbox.setEnabled(enabled)
+            
             # Credentials settings
             if hasattr(self, 'credentials_edit'):
                 self.credentials_edit.setEnabled(enabled)
@@ -633,9 +753,9 @@ class MainWindow(QMainWindow):
                 }}
             """
 
-            # Apply styles to color and browse buttons
+            # Apply styles to color, browse, and hotkey apply buttons
             for btn in [self.name_color_button, self.dialogue_color_button, 
-                       self.bg_color_button, self.browse_button]:
+                       self.bg_color_button, self.browse_button, self.hotkey_apply_button]:
                 if btn is not None:
                     btn.setStyleSheet(disabled_style if not enabled else enabled_style)
         except Exception as e:
@@ -732,7 +852,10 @@ class MainWindow(QMainWindow):
                 'target_language': target_lang,
                 'source_language': source_lang,
                 'background_color': self.bg_color_value,
-                'opacity': self.opacity_edit.text()
+                'opacity': self.opacity_edit.text(),
+                'toggle_hotkey': self.hotkey_input.text() or 'Ctrl+1',
+                'auto_pause_enabled': self.auto_pause_checkbox.isChecked(),
+                'auto_pause_threshold': self.auto_pause_threshold_spinbox.value()
             }
             self.config_manager.set_global_setting('font_family', settings['font_family'])
             self.config_manager.set_global_setting('font_size', settings['font_size'])
@@ -763,7 +886,10 @@ class MainWindow(QMainWindow):
                     'target_language': self.language_name_to_code.get(self.target_lang_combo.currentText(), 'vi'),
                     'source_language': self.language_name_to_code.get(self.source_lang_combo.currentText(), 'en'),
                     'background_color': self.bg_color_value,
-                    'opacity': str(opacity)
+                    'opacity': str(opacity),
+                    'toggle_hotkey': self.hotkey_input.text() or 'Ctrl+1',
+                    'auto_pause_enabled': self.auto_pause_checkbox.isChecked(),
+                    'auto_pause_threshold': self.auto_pause_threshold_spinbox.value()
                 }
                 for window in self.translation_windows.values():
                     if window.isVisible():
@@ -792,6 +918,109 @@ class MainWindow(QMainWindow):
                                    "Restart now to apply new credentials?") == QMessageBox.Yes:
                 QApplication.quit()
                 os.execv(sys.executable, ['python'] + sys.argv)
+
+    def on_hotkey_changed(self):
+        """Handle hotkey input changes."""
+        try:
+            current_hotkey = self.hotkey_input.text()
+            # Enable apply button only if hotkey has changed and is not empty
+            if hasattr(self, 'hotkey_apply_button'):
+                self.hotkey_apply_button.setEnabled(
+                    bool(current_hotkey) and current_hotkey != self.original_hotkey
+                )
+        except Exception as e:
+            logger.error(f"Error handling hotkey change: {str(e)}", exc_info=True)
+    
+    def update_hotkey_setting(self):
+        """Update hotkey setting when Apply button is clicked."""
+        try:
+            hotkey = self.hotkey_input.text()
+            if not hotkey:
+                QMessageBox.warning(self, "Invalid Hotkey", "Please enter a valid hotkey combination.")
+                return
+            
+            # Validate hotkey format
+            if not self.validate_hotkey(hotkey):
+                QMessageBox.warning(self, "Invalid Hotkey", 
+                                   "Invalid hotkey format. Please use a combination like:\n"
+                                   "- Ctrl+1, Ctrl+Shift+T, Alt+F1, etc.")
+                return
+            
+            self.config_manager.set_toggle_hotkey(hotkey)
+            self.original_hotkey = hotkey
+            self.hotkey_apply_button.setEnabled(False)
+            
+            # Update all active translation windows
+            for translation_window in self.translation_windows.values():
+                if translation_window.isVisible():
+                    settings = {
+                        'font_family': self.font_combo.currentText(),
+                        'font_size': self.font_size_edit.text(),
+                        'font_style': self.font_style_combo.currentText(),
+                        'name_color': self.name_color_value,
+                        'dialogue_color': self.dialogue_color_value,
+                        'target_language': self.language_name_to_code.get(self.target_lang_combo.currentText(), 'vi'),
+                        'source_language': self.language_name_to_code.get(self.source_lang_combo.currentText(), 'en'),
+                        'background_color': self.bg_color_value,
+                        'opacity': self.opacity_edit.text(),
+                        'toggle_hotkey': hotkey
+                    }
+                    translation_window.apply_settings(settings)
+            
+            QMessageBox.information(self, "Hotkey Updated", 
+                                   f"Hotkey changed to {hotkey}\n\n"
+                                   "The new hotkey is now active for all translation windows.")
+        except Exception as e:
+            logger.error(f"Error updating hotkey: {str(e)}", exc_info=True)
+            show_error_message(self, "Error", f"Failed to update hotkey: {str(e)}")
+    
+    def validate_hotkey(self, hotkey: str) -> bool:
+        """Validate hotkey format."""
+        if not hotkey or '+' not in hotkey:
+            return False
+        
+        parts = hotkey.split('+')
+        if len(parts) < 2:
+            return False
+        
+        # Check if at least one modifier is present
+        modifiers = {'Ctrl', 'Shift', 'Alt'}
+        has_modifier = any(mod in parts for mod in modifiers)
+        
+        return has_modifier
+    
+    def update_auto_pause_settings(self):
+        """Update auto-pause settings for all translation windows."""
+        try:
+            enabled = self.auto_pause_checkbox.isChecked()
+            threshold = self.auto_pause_threshold_spinbox.value()
+            
+            # Save to config
+            self.config_manager.set_auto_pause_enabled(enabled)
+            self.config_manager.set_auto_pause_threshold(threshold)
+            
+            # Update all active translation windows
+            for translation_window in self.translation_windows.values():
+                if translation_window.isVisible():
+                    settings = {
+                        'font_family': self.font_combo.currentText(),
+                        'font_size': self.font_size_edit.text(),
+                        'font_style': self.font_style_combo.currentText(),
+                        'name_color': self.name_color_value,
+                        'dialogue_color': self.dialogue_color_value,
+                        'target_language': self.language_name_to_code.get(self.target_lang_combo.currentText(), 'vi'),
+                        'source_language': self.language_name_to_code.get(self.source_lang_combo.currentText(), 'en'),
+                        'background_color': self.bg_color_value,
+                        'opacity': self.opacity_edit.text(),
+                        'toggle_hotkey': self.hotkey_input.text() or 'Ctrl+1',
+                        'auto_pause_enabled': enabled,
+                        'auto_pause_threshold': threshold
+                    }
+                    translation_window.apply_settings(settings)
+            
+            logger.info(f"Auto-pause settings updated: enabled={enabled}, threshold={threshold}")
+        except Exception as e:
+            logger.error(f"Error updating auto-pause settings: {str(e)}", exc_info=True)
 
     def check_for_updates(self):
         """Check for application updates."""

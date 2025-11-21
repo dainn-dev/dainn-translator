@@ -4,11 +4,13 @@ A real-time screen translation application that can detect and translate text fr
 
 ## Features
 
-- Real-time text detection and translation
+- Real-time text detection using Google Cloud Vision API
+- Automatic translation using Google Cloud Translation API
 - Customizable translation regions
 - Multiple language support
-- Adjustable UI settings
-- Local OCR pre-filtering (optional)
+- Adjustable UI settings (font, colors, opacity)
+- Smart caching to reduce API calls
+- Frame change detection to optimize performance
 
 ## Installation
 
@@ -61,28 +63,6 @@ A real-time screen translation application that can detect and translate text fr
    pip install -r requirements.txt
    ```
 
-### 4. Optional: Install EasyOCR
-
-The application uses EasyOCR for local text detection pre-filtering. This is optional but recommended for better performance.
-
-#### Installation
-
-EasyOCR is installed automatically with the other dependencies (see "Install Dependencies" section above). No additional installation is required.
-
-#### Supported Languages
-
-EasyOCR supports multiple languages including:
-- English
-- Chinese
-- Japanese
-- Korean
-- French
-- German
-- Spanish
-- And many more...
-
-The application will automatically use EasyOCR for text detection when available.
-
 ## Usage
 
 1. Ensure your virtual environment is activated:
@@ -102,11 +82,11 @@ The application will automatically use EasyOCR for text detection when available
    - Use the "Exit" button or press Ctrl+C in the terminal to quit
 
 4. Features:
-   - Real-time text detection and translation
+   - Real-time text detection using Google Cloud Vision API
+   - Automatic translation using Google Cloud Translation API
    - Customizable translation regions
    - Multiple language support
-   - Adjustable UI settings
-   - Optional local OCR pre-filtering (if Tesseract is installed)
+   - Adjustable UI settings (font, colors, opacity)
 
 ## Configuration
 
@@ -118,12 +98,13 @@ The application can be configured through the settings menu:
 
 ## Troubleshooting
 
-### EasyOCR Issues
+### Google Cloud Vision API Issues
 
-If you see any issues with text detection:
-1. Ensure all dependencies are installed correctly
-2. Check if your GPU is being utilized (if available)
-3. Try adjusting the text detection settings in the application's configuration menu
+If you experience issues with text detection:
+1. Verify your Google Cloud credentials are properly configured
+2. Ensure the Cloud Vision API is enabled in your Google Cloud project
+3. Check that your service account has the necessary permissions
+4. Verify your API key file path is correct in the application settings
 
 ### API Quota Issues
 

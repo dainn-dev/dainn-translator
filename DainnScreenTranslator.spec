@@ -1,4 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
+#
+# PyInstaller spec file for Dainn Screen Translator
+# This spec file is configured for directory distribution (onedir mode)
+# which is optimized for Inno Setup installer creation.
+# Output will be in dist/DainnScreenTranslator/ directory.
+#
 
 block_cipher = None
 
@@ -10,95 +16,70 @@ a = Analysis(
         ('config/config.ini', 'config'),
         ('resources/logo.ico', 'resources'),
         ('resources/logo.png', 'resources'),
-        ('file_version_info.txt', '.'),
     ],
     hiddenimports=[
-        'easyocr',
-        'torch',
-        'torchvision',
+        # Core dependencies
         'numpy',
         'PIL',
+        'PIL._tkinter_finder',
+        'PIL._imaging',
+        'cv2',
+        
+        # Google Cloud APIs
         'google.cloud.vision',
         'google.cloud.translate',
-        'screeninfo',
-        'pyautogui',
-        'cv2',
+        'pkg_resources',
+        'setuptools',
+        
+        # PyQt5 GUI
         'PyQt5.QtWidgets',
         'PyQt5.QtGui',
         'PyQt5.QtCore',
-        'PIL._tkinter_finder',
-        'PIL._imaging',
+        
+        # Screen capture
+        'pyautogui',
         'pyscreeze',
-        'socket',
-        'http.client',
-        'urllib.request',
-        'urllib.parse',
-        'ssl',
-        'pkg_resources',
-        'setuptools',
+        
+        # UI components
         'customtkinter',
-        'darkdetect',
-        'cv2',
+        
+        # Standard library modules
         'configparser',
         'logging',
-        'logging.handlers',
         'json',
         'threading',
         'concurrent.futures',
         'collections',
-        'enum',
         'typing',
         'datetime',
         'hashlib',
-        'functools',
-        'platform',
         'requests',
         'html',
-        'secrets',
-        'easyocr.data',
-        'easyocr.utils',
-        'easyocr.model',
-        'easyocr.character',
-        'easyocr.detection',
-        'easyocr.recognition',
-        'multiprocessing',
-        'multiprocessing.popen_spawn_win32',
-        'multiprocessing.popen_fork',
-        'multiprocessing.popen_forkserver',
-        'multiprocessing.context',
-        'multiprocessing.spawn',
-        'multiprocessing.util',
-        'multiprocessing.reduction',
-        'multiprocessing.forkserver',
-        'multiprocessing.connection',
-        'multiprocessing.heap',
-        'multiprocessing.synchronize',
-        'multiprocessing.sharedctypes',
-        'multiprocessing.dummy',
-        'multiprocessing.managers',
-        'multiprocessing.pool',
-        'multiprocessing.shared_memory',
-        'unittest',
-        'unittest.mock',
-        'unittest.case',
-        'unittest.suite',
-        'unittest.loader',
-        'unittest.runner',
-        'unittest.result',
-        'unittest.util',
-        'pydoc',
-        'pydoc_data',
-        'pathlib',
-        'os.path'
+        'ctypes',
+        'ctypes.wintypes'
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'sqlite3', 'test', '__main__',
+        # Testing and debugging
+        'sqlite3', 'test', '__main__', 'unittest', 'pydoc', 'pydoc_data',
+        
+        # Network protocols not needed
         'ftplib', 'netrc', 'xmlrpc', 'curses', '_pyrepl',
-        'PyQt5.QtPrintSupport', 'PyQt5.QtBluetooth', 'PyQt5.QtDesigner', 'PyQt5.QtMultimedia',
-        'PyQt5.QtNetwork', 'PyQt5.QtOpenGL', 'PyQt5.QtSql', 'PyQt5.QtTest', 'PyQt5.QtWebEngine',
+        
+        # Unused PyQt5 modules
+        'PyQt5.QtPrintSupport', 'PyQt5.QtBluetooth', 'PyQt5.QtDesigner', 
+        'PyQt5.QtMultimedia', 'PyQt5.QtNetwork', 'PyQt5.QtOpenGL', 
+        'PyQt5.QtSql', 'PyQt5.QtTest', 'PyQt5.QtWebEngine',
+        
+        # Unused ML/AI frameworks
+        'torch', 'torchvision', 'tensorflow', 'keras',
+        
+        # Unused OCR libraries
+        'easyocr', 'pytesseract', 'tesseract',
+        
+        # Unused Google Cloud services
         'google.cloud.storage', 'google.cloud.bigquery', 'google.cloud.pubsub',
         'google.cloud.datastore', 'google.cloud.firestore', 'google.cloud.spanner',
         'google.cloud.bigtable', 'google.cloud.redis', 'google.cloud.memcache',
@@ -112,12 +93,7 @@ a = Analysis(
         'google.cloud.access_approval', 'google.cloud.access_context_manager',
         'google.cloud.osconfig', 'google.cloud.oslogin', 'google.cloud.compute',
         'google.cloud.appengine', 'google.cloud.cloudfunctions', 'google.cloud.run',
-        'google.cloud.workflows', 'google.cloud.scheduler', 'google.cloud.tasks',
-        'google.cloud.iot', 'google.cloud.iot_v1', 'google.cloud.iot_v2',
-        'google.cloud.iot_core', 'google.cloud.iot_core_v1', 'google.cloud.iot_core_v2',
-        'google.cloud.iot_core_v3', 'google.cloud.iot_core_v4', 'google.cloud.iot_core_v5',
-        'google.cloud.iot_core_v6', 'google.cloud.iot_core_v7', 'google.cloud.iot_core_v8',
-        'google.cloud.iot_core_v9', 'google.cloud.iot_core_v10'
+        'google.cloud.workflows', 'google.cloud.iot'
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -125,13 +101,12 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,  # Directory mode - required for Inno Setup packaging
     name='DainnScreenTranslator',
     debug=False,
     bootloader_ignore_signals=False,
@@ -145,11 +120,17 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version='file_version_info.txt',
     icon='resources\\logo.ico',
     uac_admin=False,
-    onefile=False,
-    optimize=2,
-    bundle_files=0,
-    compressed=True,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=['Qt5Core.dll', 'Qt5Gui.dll', 'Qt5Widgets.dll', 'python3*.dll'],
+    name='DainnScreenTranslator',  # Output directory: dist/DainnScreenTranslator/
 )

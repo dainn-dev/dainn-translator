@@ -1,3 +1,13 @@
+; ============================================================================
+; Inno Setup Installer Script for Dainn Screen Translator
+; ============================================================================
+; BUILD INSTRUCTIONS:
+; 1. First, build the application with PyInstaller:
+;    pyinstaller DainnScreenTranslator.spec
+; 2. This will create the output directory: dist\DainnScreenTranslator\
+; 3. Then compile this installer script in Inno Setup
+; ============================================================================
+
 #define MyAppName "Dainn Screen Translator"
 #define MyAppVersion "1.1.0"
 #define MyAppPublisher "Dainn"
@@ -24,6 +34,8 @@ OutputBaseFilename=DainnScreenTranslator_Setup_v{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+; Uncomment the following line if you want to sign the installer (requires signtool)
+;SignTool=signtool
 VersionInfoVersion={#MyAppVersion}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName}
@@ -38,10 +50,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "config\config.ini"; DestDir: "{app}\config"; Flags: ignoreversion
-Source: "resources\logo.ico"; DestDir: "{app}\resources"; Flags: ignoreversion
-Source: "resources\logo.png"; DestDir: "{app}\resources"; Flags: ignoreversion
+; IMPORTANT: Make sure you've run 'pyinstaller DainnScreenTranslator.spec' first!
+; This will create the dist\DainnScreenTranslator\ directory with all required files.
+; Copy all files from PyInstaller output directory
+Source: "dist\DainnScreenTranslator\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -63,4 +75,4 @@ end;
 [UninstallDelete]
 Type: dirifempty; Name: "{app}\config"
 Type: dirifempty; Name: "{app}\resources"
-Type: dirifempty; Name: "{app}" 
+Type: dirifempty; Name: "{app}"

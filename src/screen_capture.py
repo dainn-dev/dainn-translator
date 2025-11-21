@@ -3,7 +3,7 @@ import cv2
 import numpy as np
 from typing import Tuple, Optional
 
-def capture_screen_region(show_instructions: bool = True) -> Tuple[Optional[np.ndarray], Optional[Tuple[int, int, int, int]]]:
+def capture_screen_region() -> Tuple[Optional[np.ndarray], Optional[Tuple[int, int, int, int]]]:
     """Capture a region of the screen selected by the user."""
     region = pyautogui.screenshot()
     region = cv2.cvtColor(np.array(region), cv2.COLOR_RGB2BGR)
