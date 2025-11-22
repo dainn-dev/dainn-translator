@@ -11,8 +11,8 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QShortcut
 )
-from PyQt5.QtCore import Qt, QTimer, QPoint, QCoreApplication, QAbstractNativeEventFilter
-from PyQt5.QtGui import QFont, QColor, QCursor, QKeySequence
+from PyQt5.QtCore import Qt, QTimer, QPoint, QCoreApplication, QAbstractNativeEventFilter, QEvent
+from PyQt5.QtGui import QFont, QColor, QKeySequence
 from src.config_manager import ConfigManager
 from src.text_processing import TextProcessor
 from typing import Tuple, Optional, Callable, Dict, List
@@ -333,6 +333,7 @@ class TranslationWindow(QMainWindow):
             f"color: {self.settings['name_color']}; background-color: transparent;"
             "padding: 2px;"
         )
+        self.name_label.setVisible(True)  # Ensure it's visible
         self.content_layout.addWidget(self.name_label)
 
         # Dialogue label
@@ -344,6 +345,7 @@ class TranslationWindow(QMainWindow):
             f"color: {self.settings['dialogue_color']}; background-color: transparent;"
             "padding: 2px;"
         )
+        self.dialogue_label.setVisible(True)  # Ensure it's visible
         self.content_layout.addWidget(self.dialogue_label)
 
         # Add stretch to push any extra space to the bottom
@@ -359,8 +361,7 @@ class TranslationWindow(QMainWindow):
             f"QPushButton {{ background-color: {rgba_str}; color: #00ff00; border: 1px solid #00ff00; border-radius: 10px; }}"
             f"QPushButton:hover {{ background-color: rgba(255,255,255,50); color: #00ff00; }}"
         )
-        self.resize_button.setCursor(Qt.SizeFDiagCursor)
-        self.resize_button.mousePressEvent = self.start_resize
+        self.resize_button.installEventFilter(self)
         self.resize_button.raise_()
 
         # Position buttons
@@ -370,15 +371,13 @@ class TranslationWindow(QMainWindow):
         """Initialize translation variables and timer."""
         self.is_dragging = False
         self.drag_start_pos = None
+        # Resize variables
         self.is_resizing = False
         self.resize_start_pos = None
-        self.resize_start_size = None
+        self.resize_start_geometry = None
         self.min_width = 100
         self.min_height = 50
         self.ui_visible = True  # Track UI visibility state
-        self.resize_timer = QTimer()
-        self.resize_timer.setInterval(16)
-        self.resize_timer.timeout.connect(self.update_resize)
 
         self.running = False
         self.region = None
@@ -396,7 +395,6 @@ class TranslationWindow(QMainWindow):
         self.current_interval = self.min_interval
         self.consecutive_empty_frames = 0
         self.is_capturing = False
-        self.was_capturing_before_resize = False
         
         # Auto-pause feature variables
         self.consecutive_no_text_captures = 0
@@ -612,8 +610,6 @@ class TranslationWindow(QMainWindow):
             # Stop timers
             if hasattr(self, 'timer') and self.timer:
                 self.timer.stop()
-            if hasattr(self, 'resize_timer') and self.resize_timer:
-                self.resize_timer.stop()
             if hasattr(self, 'translation_cache') and hasattr(self.translation_cache, 'cleanup_timer'):
                 self.translation_cache.cleanup_timer.stop()
             self.unregister_global_hotkey()
@@ -641,8 +637,6 @@ class TranslationWindow(QMainWindow):
             # Stop timers
             if hasattr(self, 'timer') and self.timer:
                 self.timer.stop()
-            if hasattr(self, 'resize_timer') and self.resize_timer:
-                self.resize_timer.stop()
             if hasattr(self, 'translation_cache') and hasattr(self.translation_cache, 'cleanup_timer'):
                 self.translation_cache.cleanup_timer.stop()
             self.unregister_global_hotkey()
@@ -658,6 +652,7 @@ class TranslationWindow(QMainWindow):
     def toggle_capture(self):
         """Toggle the capture state."""
         self.is_capturing = not self.is_capturing
+        logger.info(f"Capture toggled: is_capturing={self.is_capturing}, region={self.region}")
         
         # Reset auto-pause state when manually toggling
         if self.is_capturing:
@@ -669,9 +664,11 @@ class TranslationWindow(QMainWindow):
         if self.is_capturing:
             self.running = True
             self.timer.start(int(self.current_interval))
+            logger.info(f"Translation started: interval={self.current_interval}ms, region={self.region}")
         else:
             self.running = False
             self.timer.stop()
+            logger.info("Translation stopped")
     
     def update_capture_button_state(self):
         """Update capture button appearance based on state."""
@@ -725,11 +722,15 @@ class TranslationWindow(QMainWindow):
     def continuous_translate(self):
         """Continuously translate screen region text with optimizations."""
         if not self.running or not self.region or not self.text_processor or self.processing or not self.is_capturing:
+            logger.debug(f"Skipping translation: running={self.running}, region={self.region}, "
+                        f"text_processor={self.text_processor is not None}, processing={self.processing}, "
+                        f"is_capturing={self.is_capturing}")
             return
 
         try:
             self.processing = True
             x, y, w, h = self.region
+            logger.debug(f"Capturing screen region: ({x}, {y}, {w}, {h})")
             
             # Capture screen in a separate thread
             def capture_screen():
@@ -772,18 +773,29 @@ class TranslationWindow(QMainWindow):
             self.last_frame_hash = current_frame_hash
             self.last_frame = screenshot.copy()
             
-            # Process the frame with Vision API
+            # Process the frame with Vision API or Tesseract OCR
             text = self.text_processor.detect_text(screenshot)
+            logger.debug(f"Detected text: '{text[:100] if text else '(empty)'}'")
             
-            # Update Vision API counter
-            self.vision_counter_label.setText(f"Vision API: {self.text_processor.vision_api_calls_today} requests")
+            # Update Vision API counter (or OCR status for local/libretranslate mode)
+            translation_mode = self.config_manager.get_translation_mode()
+            if translation_mode == 'local' or translation_mode == 'libretranslate':
+                # For local/libretranslate mode, show OCR status instead
+                ocr_mode = self.config_manager.get_ocr_mode()
+                ocr_name = "Tesseract" if ocr_mode == 'tesseract' else "PaddleOCR"
+                status = f"{ocr_name}: Ready" if text else f"{ocr_name}: No text"
+                self.vision_counter_label.setText(status)
+            else:
+                self.vision_counter_label.setText(f"Vision API: {self.text_processor.vision_api_calls_today} requests")
             
             # Check for auto-pause feature
+            # Note: This works for both Google Cloud and Local (Tesseract) translation modes
+            # because it checks text detection results regardless of the detection method used
             auto_pause_enabled = self.settings.get('auto_pause_enabled', False)
             auto_pause_threshold = self.settings.get('auto_pause_threshold', 5)
             
             if not text or text.strip() == "":
-                # No text detected
+                # No text detected (works for both Vision API and Tesseract OCR)
                 self.consecutive_no_text_captures += 1
                 
                 # Check if we should auto-pause
@@ -837,20 +849,37 @@ class TranslationWindow(QMainWindow):
             
             # Translate text in a separate thread
             def translate_text():
+                logger.debug(f"Starting translation: '{text[:50]}...' ({self.settings['source_language']} -> {self.settings['target_language']})")
                 self.rate_limiter.add_request()
                 translated = self.text_processor.translate_text(
                     text, 
                     self.settings['target_language'], 
                     self.settings['source_language']
                 )
+                logger.debug(f"Translation completed: '{translated[:50] if translated else '(empty)'}...'")
                 # Only update Translation API counter if we actually made an API call
                 if not cached_translation:
-                    self.translation_counter_label.setText(f"Translation API: {self.text_processor.translation_api_calls_today} requests")
+                    translation_mode = self.config_manager.get_translation_mode()
+                    if translation_mode == 'local':
+                        self.translation_counter_label.setText(f"LLM: Ready")
+                    elif translation_mode == 'libretranslate':
+                        self.translation_counter_label.setText(f"LibreTranslate: Ready")
+                    else:
+                        self.translation_counter_label.setText(f"Translation API: {self.text_processor.translation_api_calls_today} requests")
                 return translated
             
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(translate_text)
                 translated_text = future.result()
+            
+            # Check if translation was successful
+            if not translated_text or translated_text.strip() == "":
+                logger.warning(f"Translation returned empty text. Original: '{text[:50]}...'")
+                translated_text = text  # Fallback to original text
+            
+            # Check if translation is the same as original (might indicate failure)
+            if translated_text == text:
+                logger.debug(f"Translation same as original (might be cached or failed): '{text[:50]}...'")
             
             # Cache the translation
             self.translation_cache.put(
@@ -861,6 +890,7 @@ class TranslationWindow(QMainWindow):
             )
             
             # Update display
+            logger.info(f"Calling update_text with: '{translated_text[:100]}...'")
             self.update_text(translated_text)
             self.last_text = text
             self.last_translated_text = translated_text
@@ -885,20 +915,60 @@ class TranslationWindow(QMainWindow):
     def update_text(self, text: str):
         """Update displayed text."""
         try:
-            logger.debug(f"Updating text: {text}")
+            if not text:
+                logger.warning("update_text called with empty text")
+                return
+            
+            logger.info(f"Updating displayed text: '{text[:100]}...' (length: {len(text)})")
             decoded_text = html.unescape(text)
+            
             if ":" in decoded_text:
                 name, dialogue = decoded_text.split(":", 1)
-                self.name_label.setText(name.strip())
-                self.dialogue_label.setText(dialogue.strip())
-                logger.debug(f"Name: {name.strip()}")
-                logger.debug(f"Dialogue: {dialogue.strip()}")
+                name_text = name.strip()
+                dialogue_text = dialogue.strip()
+                logger.info(f"Setting name label: '{name_text}'")
+                logger.info(f"Setting dialogue label: '{dialogue_text}'")
+                self.name_label.setText(name_text)
+                self.dialogue_label.setText(dialogue_text)
+                
+                # Ensure labels are visible
+                if not self.name_label.isVisible():
+                    logger.warning("Name label is not visible!")
+                    self.name_label.setVisible(True)
+                if not self.dialogue_label.isVisible():
+                    logger.warning("Dialogue label is not visible!")
+                    self.dialogue_label.setVisible(True)
             else:
+                logger.info(f"Setting single line text: '{decoded_text}'")
                 self.name_label.setText("")
                 self.dialogue_label.setText(decoded_text)
-                logger.debug(f"Single line text: {decoded_text}")
+                
+                # Ensure dialogue label is visible
+                if not self.dialogue_label.isVisible():
+                    logger.warning("Dialogue label is not visible!")
+                    self.dialogue_label.setVisible(True)
             
-            self.show()
+            # Ensure content widget is visible
+            if hasattr(self, 'content_widget') and not self.content_widget.isVisible():
+                logger.warning("Content widget is not visible, making it visible")
+                self.content_widget.setVisible(True)
+            
+            # Ensure window is visible
+            if not self.isVisible():
+                logger.info("Window not visible, showing window")
+                self.show()
+                self.raise_()  # Bring to front
+                self.activateWindow()  # Activate the window
+            
+            # Force update/repaint
+            self.name_label.update()
+            self.dialogue_label.update()
+            if hasattr(self, 'content_widget'):
+                self.content_widget.update()
+            self.update()
+            QApplication.processEvents()  # Force Qt to process events and update UI
+            
+            logger.info(f"Text update completed. Name label text: '{self.name_label.text()[:50]}...', Dialogue label text: '{self.dialogue_label.text()[:50]}...'")
         except Exception as e:
             logger.error(f"Error updating text: {str(e)}", exc_info=True)
 
@@ -995,74 +1065,32 @@ class TranslationWindow(QMainWindow):
         if self.last_text:
             self.continuous_translate()
 
-    def start_resize(self, event):
-        """Start resizing the window."""
-        if event.button() == Qt.LeftButton:
-            self.is_resizing = True
-            self.resize_start_pos = event.globalPos()
-            self.resize_start_size = self.size()
-            self.setCursor(Qt.SizeFDiagCursor)
-            self.was_capturing_before_resize = self.is_capturing
-            if self.is_capturing:
-                self.toggle_capture()
-            self.resize_timer.start()
-
-    def update_resize(self):
-        """Update window size during resize."""
-        if not self.is_resizing:
-            self.resize_timer.stop()
-            return
-        current_pos = QCursor.pos()
-        width_diff = current_pos.x() - self.resize_start_pos.x()
-        height_diff = current_pos.y() - self.resize_start_pos.y()
-        new_width = max(self.min_width, self.resize_start_size.width() + width_diff)
-        new_height = max(self.min_height, self.resize_start_size.height() + height_diff)
-        
-        # Get all available screens
-        screens = QApplication.screens()
-        # Find the screen that contains the current position
-        current_screen = None
-        for screen in screens:
-            if screen.geometry().contains(current_pos):
-                current_screen = screen
-                break
-        
-        # If no screen contains the position, use the screen that contains the window
-        if not current_screen:
-            for screen in screens:
-                if screen.geometry().contains(self.pos()):
-                    current_screen = screen
-                    break
-        
-        # If still no screen found, use primary screen
-        if not current_screen:
-            current_screen = QApplication.primaryScreen()
-        
-        screen_geometry = current_screen.geometry()
-        new_width = min(new_width, screen_geometry.width() - (self.x() - screen_geometry.x()))
-        new_height = min(new_height, screen_geometry.height() - (self.y() - screen_geometry.y()))
-        
-        self.resize(new_width, new_height)
-        content_width = new_width - 40
-        self.name_label.setFixedWidth(content_width)
-        self.dialogue_label.setFixedWidth(content_width)
-        frame_geom = self.frameGeometry()
-        self.region = (
-            frame_geom.x(),
-            frame_geom.y(),
-            frame_geom.width(),
-            frame_geom.height()
-        )
+    def eventFilter(self, obj, event):
+        """Filter events for resize button."""
+        if obj == self.resize_button:
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self.start_resize(event.globalPos())
+                return True
+            elif event.type() == QEvent.MouseMove and self.is_resizing:
+                self.handle_resize(event.globalPos())
+                return True
+            elif event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                self.stop_resize()
+                return True
+        return super().eventFilter(obj, event)
 
     def mousePressEvent(self, event):
         """Handle mouse press for dragging."""
-        if event.button() == Qt.LeftButton and not self.is_resizing:
+        if event.button() == Qt.LeftButton:
             pos = event.pos()
             close_rect = self.close_button.geometry()
             resize_rect = self.resize_button.geometry()
             capture_rect = self.capture_button.geometry()
             toggle_rect = self.toggle_ui_button.geometry()
-            if close_rect.contains(pos) or resize_rect.contains(pos) or capture_rect.contains(pos) or toggle_rect.contains(pos):
+            if resize_rect.contains(pos):
+                self.start_resize(event.globalPos())
+                return
+            if close_rect.contains(pos) or capture_rect.contains(pos) or toggle_rect.contains(pos):
                 return
             self.is_dragging = True
             self.drag_start_pos = event.globalPos() - self.pos()
@@ -1073,7 +1101,10 @@ class TranslationWindow(QMainWindow):
                 self.toggle_capture()
 
     def mouseMoveEvent(self, event):
-        """Handle mouse move for dragging."""
+        """Handle mouse move for dragging and resizing."""
+        if self.is_resizing:
+            self.handle_resize(event.globalPos())
+            return
         if self.is_dragging:
             new_pos = event.globalPos() - self.drag_start_pos
             # Get all available screens
@@ -1096,6 +1127,9 @@ class TranslationWindow(QMainWindow):
     def mouseReleaseEvent(self, event):
         """Handle mouse release for dragging and resizing."""
         if event.button() == Qt.LeftButton:
+            if self.is_resizing:
+                self.stop_resize()
+                return
             if self.is_dragging:
                 self.is_dragging = False
                 if self.config_manager and self.window_id:
@@ -1103,42 +1137,78 @@ class TranslationWindow(QMainWindow):
                 # Resume capture when dragging ends
                 if not self.is_capturing:
                     self.toggle_capture()
-            if self.is_resizing:
-                self.is_resizing = False
-                self.resize_timer.stop()
-                frame_geom = self.frameGeometry()
-                self.region = (
-                    frame_geom.x(),
-                    frame_geom.y(),
-                    frame_geom.width(),
-                    frame_geom.height()
-                )
-                if self.config_manager and self.window_id:
-                    try:
-                        self.config_manager.set_global_setting(
-                            f'window_{self.window_id}_size',
-                            f"{frame_geom.width()},{frame_geom.height()}"
-                        )
-                        self.config_manager.set_global_setting(
-                            f'window_{self.window_id}_pos',
-                            f"{frame_geom.x()},{frame_geom.y()}"
-                        )
-                    except Exception as e:
-                        logger.error(f"Error saving window size for window {self.window_id}: {e}")
-                if hasattr(self, 'area_id') and self.area_id and self.config_manager:
-                    try:
-                        self.config_manager.save_area(
-                            self.area_id,
-                            frame_geom.x(),
-                            frame_geom.y(),
-                            frame_geom.width(),
-                            frame_geom.height()
-                        )
-                    except Exception as e:
-                        logger.error(f"Error saving area {self.area_id} after resize: {e}")
-                if self.was_capturing_before_resize and not self.is_capturing:
-                    self.toggle_capture()
-                self.was_capturing_before_resize = False
-            else:
-                self.was_capturing_before_resize = False
             self.setCursor(Qt.ArrowCursor)
+
+    def start_resize(self, global_pos):
+        """Start resizing the window."""
+        self.is_resizing = True
+        self.resize_start_pos = global_pos
+        self.resize_start_geometry = self.geometry()
+        self.setCursor(Qt.SizeFDiagCursor)
+        # Grab mouse to track movements globally
+        self.grabMouse()
+        
+        # Stop capture when resizing starts
+        if self.is_capturing:
+            self.toggle_capture()
+
+    def handle_resize(self, global_pos):
+        """Handle window resizing."""
+        if not self.is_resizing or not self.resize_start_pos or not self.resize_start_geometry:
+            return
+        
+        # Calculate the difference in mouse position
+        delta_x = global_pos.x() - self.resize_start_pos.x()
+        delta_y = global_pos.y() - self.resize_start_pos.y()
+        
+        # Calculate new size
+        new_width = max(self.min_width, self.resize_start_geometry.width() + delta_x)
+        new_height = max(self.min_height, self.resize_start_geometry.height() + delta_y)
+        
+        # Get screen bounds to ensure window stays within screen
+        screens = QApplication.screens()
+        current_screen = None
+        for screen in screens:
+            screen_geometry = screen.geometry()
+            if screen_geometry.contains(self.resize_start_geometry.topLeft()):
+                current_screen = screen_geometry
+                break
+        
+        if not current_screen:
+            current_screen = QApplication.primaryScreen().geometry()
+        
+        # Limit size to screen bounds
+        max_width = current_screen.right() - self.resize_start_geometry.left()
+        max_height = current_screen.bottom() - self.resize_start_geometry.top()
+        new_width = min(new_width, max_width)
+        new_height = min(new_height, max_height)
+        
+        # Resize the window
+        self.resize(new_width, new_height)
+        
+        # Update label widths
+        content_width = new_width - 40
+        self.name_label.setFixedWidth(content_width)
+        self.dialogue_label.setFixedWidth(content_width)
+        
+        # Update button positions
+        self.position_buttons()
+
+    def stop_resize(self):
+        """Stop resizing the window."""
+        if self.is_resizing:
+            self.is_resizing = False
+            self.resize_start_pos = None
+            self.resize_start_geometry = None
+            self.setCursor(Qt.ArrowCursor)
+            # Release mouse grab
+            self.releaseMouse()
+            
+            # Update region if it exists
+            if self.region:
+                x, y, _, _ = self.region
+                self.region = (x, y, self.width(), self.height())
+            
+            # Resume capture when resizing ends
+            if not self.is_capturing:
+                self.toggle_capture()

@@ -69,7 +69,7 @@ Name: "{app}\resources"; Flags: uninsalwaysuninstall
 [Code]
 procedure InitializeWizard;
 begin
-  WizardForm.WelcomeLabel2.Caption := 'This will install Dainn Screen Translator on your computer.'#13#13'Dainn Screen Translator is a real-time screen translator that helps you translate text from your screen instantly using Google Cloud Vision and Translation APIs.';
+  WizardForm.WelcomeLabel2.Caption := 'This will install Dainn Screen Translator on your computer.'#13#13'Dainn Screen Translator is a real-time screen translator that helps you translate text from your screen instantly.'#13#13'Features:'#13'- Google Cloud Vision & Translation APIs (cloud-based)'#13'- Local LLM mode with Tesseract OCR + LLM Studio (offline)'#13'- Customizable translation regions and UI settings';
 end;
 
 [UninstallDelete]

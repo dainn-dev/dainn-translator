@@ -48,8 +48,15 @@ class ConfigManager:
             'opacity': '0.85',
             'credentials_path': '',
             'toggle_hotkey': 'Ctrl+1',
+            'add_area_hotkey': 'Ctrl+2',
             'auto_pause_enabled': 'False',
-            'auto_pause_threshold': '5'
+            'auto_pause_threshold': '5',
+            'translation_mode': 'google',
+            'llm_studio_url': 'http://localhost:1234/v1',
+            'llm_studio_model': '',
+            'tesseract_path': '',
+            'libretranslate_url': 'http://localhost:5000',
+            'ocr_mode': 'tesseract'
         }
 
     def create_languages_section(self) -> None:
@@ -253,6 +260,14 @@ class ConfigManager:
         """Set the toggle hotkey"""
         self.set_global_setting('toggle_hotkey', hotkey)
     
+    def get_add_area_hotkey(self) -> str:
+        """Get the add area hotkey"""
+        return self.get_global_setting('add_area_hotkey', 'Ctrl+2')
+    
+    def set_add_area_hotkey(self, hotkey: str) -> None:
+        """Set the add area hotkey"""
+        self.set_global_setting('add_area_hotkey', hotkey)
+    
     def get_auto_pause_enabled(self) -> bool:
         """Get auto pause enabled status"""
         value = self.get_global_setting('auto_pause_enabled', 'False')
@@ -271,4 +286,56 @@ class ConfigManager:
     
     def set_auto_pause_threshold(self, threshold: int) -> None:
         """Set auto pause threshold"""
-        self.set_global_setting('auto_pause_threshold', str(threshold)) 
+        self.set_global_setting('auto_pause_threshold', str(threshold))
+    
+    def get_translation_mode(self) -> str:
+        """Get translation mode ('google', 'local', or 'libretranslate')"""
+        return self.get_global_setting('translation_mode', 'google')
+    
+    def set_translation_mode(self, mode: str) -> None:
+        """Set translation mode ('google', 'local', or 'libretranslate')"""
+        if mode not in ('google', 'local', 'libretranslate'):
+            raise ValueError("Translation mode must be 'google', 'local', or 'libretranslate'")
+        self.set_global_setting('translation_mode', mode)
+    
+    def get_llm_studio_url(self) -> str:
+        """Get LLM Studio API URL"""
+        return self.get_global_setting('llm_studio_url', 'http://localhost:1234/v1')
+    
+    def set_llm_studio_url(self, url: str) -> None:
+        """Set LLM Studio API URL"""
+        self.set_global_setting('llm_studio_url', url)
+    
+    def get_llm_studio_model(self) -> str:
+        """Get LLM Studio model name (empty string means auto-detect)"""
+        return self.get_global_setting('llm_studio_model', '')
+    
+    def set_llm_studio_model(self, model: str) -> None:
+        """Set LLM Studio model name (empty string means auto-detect)"""
+        self.set_global_setting('llm_studio_model', model)
+    
+    def get_tesseract_path(self) -> str:
+        """Get Tesseract executable path"""
+        return self.get_global_setting('tesseract_path', '')
+    
+    def set_tesseract_path(self, path: str) -> None:
+        """Set Tesseract executable path"""
+        self.set_global_setting('tesseract_path', path)
+    
+    def get_libretranslate_url(self) -> str:
+        """Get LibreTranslate API URL"""
+        return self.get_global_setting('libretranslate_url', 'http://localhost:5000')
+    
+    def set_libretranslate_url(self, url: str) -> None:
+        """Set LibreTranslate API URL"""
+        self.set_global_setting('libretranslate_url', url)
+    
+    def get_ocr_mode(self) -> str:
+        """Get OCR mode ('tesseract' or 'paddleocr')"""
+        return self.get_global_setting('ocr_mode', 'tesseract')
+    
+    def set_ocr_mode(self, mode: str) -> None:
+        """Set OCR mode ('tesseract' or 'paddleocr')"""
+        if mode not in ('tesseract', 'paddleocr'):
+            raise ValueError("OCR mode must be 'tesseract' or 'paddleocr'")
+        self.set_global_setting('ocr_mode', mode) 

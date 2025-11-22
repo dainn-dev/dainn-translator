@@ -1,14 +1,14 @@
 import os
 import sys
-import json
 import logging
 import time
+from typing import Optional
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGroupBox, QLabel,
     QPushButton, QComboBox, QLineEdit, QTreeWidget, QTreeWidgetItem,
     QFileDialog, QColorDialog, QMessageBox, QApplication, QCheckBox, QSpinBox
 )
-from PyQt5.QtCore import Qt, QTimer, QEvent
+from PyQt5.QtCore import Qt, QTimer, QEvent, QThread, pyqtSignal, QAbstractNativeEventFilter, QCoreApplication
 from PyQt5.QtGui import QIcon, QColor, QKeySequence
 from src.config_manager import ConfigManager
 from src.screen_capture import capture_screen_region
@@ -18,6 +18,98 @@ from src.text_processing import TextProcessor
 from src.version_checker import VersionChecker
 
 logger = logging.getLogger(__name__)
+
+# Import Windows hotkey support
+IS_WINDOWS = os.name == 'nt'
+if IS_WINDOWS:
+    import ctypes
+    from ctypes import wintypes
+    WM_HOTKEY = 0x0312
+    MOD_CONTROL = 0x0002
+    MOD_SHIFT = 0x0004
+    MOD_ALT = 0x0001
+    HOTKEY_ID_BASE_MAIN = 0xB000
+    
+    # Virtual key code mapping (from translation_window.py)
+    VK_CODES = {
+        # Numbers
+        '0': 0x30, '1': 0x31, '2': 0x32, '3': 0x33, '4': 0x34,
+        '5': 0x35, '6': 0x36, '7': 0x37, '8': 0x38, '9': 0x39,
+        # Letters
+        'A': 0x41, 'B': 0x42, 'C': 0x43, 'D': 0x44, 'E': 0x45,
+        'F': 0x46, 'G': 0x47, 'H': 0x48, 'I': 0x49, 'J': 0x4A,
+        'K': 0x4B, 'L': 0x4C, 'M': 0x4D, 'N': 0x4E, 'O': 0x4F,
+        'P': 0x50, 'Q': 0x51, 'R': 0x52, 'S': 0x53, 'T': 0x54,
+        'U': 0x55, 'V': 0x56, 'W': 0x57, 'X': 0x58, 'Y': 0x59, 'Z': 0x5A,
+        # Function keys
+        'F1': 0x70, 'F2': 0x71, 'F3': 0x72, 'F4': 0x73, 'F5': 0x74, 'F6': 0x75,
+        'F7': 0x76, 'F8': 0x77, 'F9': 0x78, 'F10': 0x79, 'F11': 0x7A, 'F12': 0x7B,
+        # Special keys
+        'SPACE': 0x20, 'PAGEUP': 0x21, 'PAGEDOWN': 0x22, 'END': 0x23, 'HOME': 0x24,
+        'LEFT': 0x25, 'UP': 0x26, 'RIGHT': 0x27, 'DOWN': 0x28,
+        'INSERT': 0x2D, 'DELETE': 0x2E,
+        # Symbol keys
+        '`': 0xC0, '-': 0xBD, '=': 0xBB, '[': 0xDB, ']': 0xDD,
+        '\\': 0xDC, ';': 0xBA, "'": 0xDE, ',': 0xBC, '.': 0xBE, '/': 0xBF,
+    }
+    
+    class WindowsHotkeyFilterMain(QAbstractNativeEventFilter):
+        """Event filter to capture native WM_HOTKEY events for MainWindow."""
+        
+        def __init__(self, callback: callable):
+            super().__init__()
+            self.callback = callback
+            self.hotkey_id: Optional[int] = None
+        
+        def set_hotkey_id(self, hotkey_id: Optional[int]):
+            self.hotkey_id = hotkey_id
+        
+        def nativeEventFilter(self, event_type, message):
+            if self.hotkey_id is None:
+                return False, 0
+            if event_type == "windows_generic_MSG":
+                try:
+                    msg = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG)).contents
+                except (ValueError, TypeError):
+                    return False, 0
+                if msg.message == WM_HOTKEY and msg.wParam == self.hotkey_id:
+                    QTimer.singleShot(0, self.callback)
+                    return True, 0
+            return False, 0
+
+
+class LLMInitializationThread(QThread):
+    """Thread for initializing LLM Studio translator in the background."""
+    initialized = pyqtSignal(object)  # Emits LLMStudioTranslator instance
+    error = pyqtSignal(str)  # Emits error message
+    
+    def __init__(self, api_url: str, model_name: str = None):
+        super().__init__()
+        self.api_url = api_url
+        self.model_name = model_name
+    
+    def run(self):
+        """Initialize LLM Studio translator in background thread."""
+        try:
+            logger.info("Background thread: Initializing LLM Studio translator...")
+            from src.translator.llm_studio_translator import LLMStudioTranslator
+            
+            # Use model name if configured, otherwise None for auto-detect
+            model_name = self.model_name if self.model_name else None
+            llm_studio_translator = LLMStudioTranslator(self.api_url, model_name=model_name)
+            
+            # Test connection
+            if llm_studio_translator.test_connection():
+                logger.info("Background thread: LLM Studio connection successful")
+                self.initialized.emit(llm_studio_translator)
+            else:
+                logger.warning("Background thread: LLM Studio connection test failed. The API may not be running.")
+                self.error.emit("LLM Studio connection test failed. The API may not be running.")
+        except Exception as e:
+            error_msg = f"Error initializing LLM Studio translator: {str(e)}"
+            logger.error(f"Background thread: {error_msg}", exc_info=True)
+            self.error.emit(error_msg)
+
 
 class HotkeyInput(QLineEdit):
     """Custom QLineEdit for capturing keyboard shortcuts."""
@@ -120,7 +212,7 @@ class HotkeyInput(QLineEdit):
 class MainWindow(QMainWindow):
     """Main application window for the real-time screen translator."""
     
-    def __init__(self, text_processor: TextProcessor):
+    def __init__(self, text_processor: TextProcessor, config_manager: ConfigManager = None):
         super().__init__()
         self.setWindowTitle("Real-time Screen Translator")
         self.setGeometry(100, 100, 900, 400)
@@ -139,10 +231,21 @@ class MainWindow(QMainWindow):
         self.frame_bg = "#ffffff"
 
         # Config manager
-        self.config_manager = ConfigManager()
+        self.config_manager = config_manager if config_manager else ConfigManager()
+        
+        # LLM initialization thread
+        self.llm_init_thread = None
 
         # Version checker
         self.version_checker = VersionChecker()
+        
+        # Global hotkey for add area
+        if IS_WINDOWS:
+            self.add_area_hotkey_id: Optional[int] = None
+            self.add_area_hotkey_filter: Optional['WindowsHotkeyFilterMain'] = None
+        else:
+            self.add_area_hotkey_id = None
+            self.add_area_hotkey_filter = None
         self.version_check_timer = QTimer()
         self.version_check_timer.timeout.connect(self.check_for_updates)
         self.version_check_timer.start(3600000)  # Check every hour
@@ -158,6 +261,44 @@ class MainWindow(QMainWindow):
 
         # Check for updates after a short delay to ensure the window is fully loaded
         QTimer.singleShot(2000, self.check_for_updates)
+        
+        # Register add area hotkey
+        if IS_WINDOWS:
+            QTimer.singleShot(100, self.register_add_area_hotkey)
+    
+    def init_llm_in_background(self):
+        """Initialize LLM Studio translator in a background thread."""
+        try:
+            logger.info("Starting LLM initialization in background thread...")
+            llm_studio_url = self.config_manager.get_llm_studio_url()
+            llm_studio_model = self.config_manager.get_llm_studio_model()
+            
+            # Create and start the initialization thread
+            self.llm_init_thread = LLMInitializationThread(llm_studio_url, llm_studio_model)
+            self.llm_init_thread.initialized.connect(self.on_llm_initialized)
+            self.llm_init_thread.error.connect(self.on_llm_initialization_error)
+            self.llm_init_thread.finished.connect(self.on_llm_thread_finished)
+            self.llm_init_thread.start()
+        except Exception as e:
+            logger.error(f"Error starting LLM initialization thread: {str(e)}", exc_info=True)
+    
+    def on_llm_initialized(self, llm_studio_translator):
+        """Handle successful LLM initialization."""
+        try:
+            logger.info("LLM Studio translator initialized successfully, updating TextProcessor")
+            self.text_processor.set_llm_studio_translator(llm_studio_translator)
+            logger.info("TextProcessor updated with LLM Studio translator")
+        except Exception as e:
+            logger.error(f"Error updating TextProcessor with LLM translator: {str(e)}", exc_info=True)
+    
+    def on_llm_initialization_error(self, error_msg: str):
+        """Handle LLM initialization error."""
+        logger.warning(f"LLM initialization error: {error_msg}")
+    
+    def on_llm_thread_finished(self):
+        """Handle LLM initialization thread completion."""
+        logger.info("LLM initialization thread finished")
+        self.llm_init_thread = None
 
     def init_ui(self):
         """Initialize the user interface."""
@@ -277,28 +418,57 @@ class MainWindow(QMainWindow):
         self.hotkey_group = QGroupBox("Hotkey Settings")
         self.hotkey_group.setStyleSheet(f"background-color: {self.frame_bg};")
         self.settings_layout.addWidget(self.hotkey_group)
-        self.hotkey_layout = QHBoxLayout(self.hotkey_group)
+        self.hotkey_layout = QVBoxLayout(self.hotkey_group)
 
+        # Toggle Hotkey row
+        self.toggle_hotkey_layout = QHBoxLayout()
         self.hotkey_label = QLabel("Toggle Hotkey:")
-        self.hotkey_layout.addWidget(self.hotkey_label)
+        self.toggle_hotkey_layout.addWidget(self.hotkey_label)
         
         # Use custom HotkeyInput widget instead of combobox
         self.hotkey_input = HotkeyInput()
         self.hotkey_input.setText(self.config_manager.get_toggle_hotkey())
         self.hotkey_input.textChanged.connect(self.on_hotkey_changed)
-        self.hotkey_layout.addWidget(self.hotkey_input)
+        self.toggle_hotkey_layout.addWidget(self.hotkey_input)
 
         self.hotkey_apply_button = QPushButton("Apply")
         self.hotkey_apply_button.clicked.connect(self.update_hotkey_setting)
         self.hotkey_apply_button.setEnabled(False)
-        self.hotkey_layout.addWidget(self.hotkey_apply_button)
+        self.toggle_hotkey_layout.addWidget(self.hotkey_apply_button)
 
         self.hotkey_info_label = QLabel("(Click field and press keys)")
         self.hotkey_info_label.setStyleSheet("color: #666666; font-size: 9pt;")
-        self.hotkey_layout.addWidget(self.hotkey_info_label)
+        self.toggle_hotkey_layout.addWidget(self.hotkey_info_label)
         
         # Store the original hotkey for comparison
         self.original_hotkey = self.config_manager.get_toggle_hotkey()
+        
+        self.hotkey_layout.addLayout(self.toggle_hotkey_layout)
+
+        # Add Area hotkey settings (below Toggle Hotkey)
+        self.add_area_hotkey_layout = QHBoxLayout()
+        self.add_area_hotkey_label = QLabel("Add Area Hotkey:")
+        self.add_area_hotkey_layout.addWidget(self.add_area_hotkey_label)
+        
+        # Use custom HotkeyInput widget for add area hotkey
+        self.add_area_hotkey_input = HotkeyInput()
+        self.add_area_hotkey_input.setText(self.config_manager.get_add_area_hotkey())
+        self.add_area_hotkey_input.textChanged.connect(self.on_add_area_hotkey_changed)
+        self.add_area_hotkey_layout.addWidget(self.add_area_hotkey_input)
+
+        self.add_area_hotkey_apply_button = QPushButton("Apply")
+        self.add_area_hotkey_apply_button.clicked.connect(self.update_add_area_hotkey_setting)
+        self.add_area_hotkey_apply_button.setEnabled(False)
+        self.add_area_hotkey_layout.addWidget(self.add_area_hotkey_apply_button)
+
+        self.add_area_hotkey_info_label = QLabel("(Click field and press keys)")
+        self.add_area_hotkey_info_label.setStyleSheet("color: #666666; font-size: 9pt;")
+        self.add_area_hotkey_layout.addWidget(self.add_area_hotkey_info_label)
+        
+        # Store the original add area hotkey for comparison
+        self.original_add_area_hotkey = self.config_manager.get_add_area_hotkey()
+        
+        self.hotkey_layout.addLayout(self.add_area_hotkey_layout)
 
         # Auto-pause settings
         self.auto_pause_group = QGroupBox("Auto-Pause Settings")
@@ -322,10 +492,144 @@ class MainWindow(QMainWindow):
         self.auto_pause_label = QLabel("captures without text")
         self.auto_pause_layout.addWidget(self.auto_pause_label)
 
-        self.auto_pause_info_label = QLabel("(Saves API calls)")
+        self.auto_pause_info_label = QLabel("(Saves API calls / CPU resources)")
         self.auto_pause_info_label.setStyleSheet("color: #666666; font-size: 9pt;")
+        self.auto_pause_info_label.setToolTip("Saves API calls in Google Cloud mode, saves CPU resources in Local mode")
         self.auto_pause_layout.addWidget(self.auto_pause_info_label)
         self.auto_pause_layout.addStretch()
+
+        # Translation mode settings
+        self.translation_mode_group = QGroupBox("Translation Mode")
+        self.translation_mode_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.settings_layout.addWidget(self.translation_mode_group)
+        self.translation_mode_layout = QVBoxLayout(self.translation_mode_group)
+
+        self.mode_label = QLabel("Mode:")
+        self.translation_mode_layout.addWidget(self.mode_label)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["Google Cloud", "Local(Tesseract + LM Studio)", "LibreTranslate(Tesseract + LibreTranslate)"])
+        current_mode = self.config_manager.get_translation_mode()
+        if current_mode == 'google':
+            mode_index = 0
+        elif current_mode == 'local':
+            mode_index = 1
+        else:  # libretranslate
+            mode_index = 2
+        self.mode_combo.setCurrentIndex(mode_index)
+        self.mode_combo.currentIndexChanged.connect(self.on_translation_mode_changed)
+        self.translation_mode_layout.addWidget(self.mode_combo)
+
+        # LLM Studio settings (shown only when local mode is selected)
+        self.llm_studio_group = QGroupBox("LLM Studio Settings")
+        self.llm_studio_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.translation_mode_layout.addWidget(self.llm_studio_group)
+        self.llm_studio_layout = QVBoxLayout(self.llm_studio_group)
+
+        # API URL setting
+        self.llm_studio_url_layout = QHBoxLayout()
+        self.llm_studio_url_label = QLabel("API URL:")
+        self.llm_studio_url_layout.addWidget(self.llm_studio_url_label)
+        self.llm_studio_edit = QLineEdit()
+        self.llm_studio_edit.setText(self.config_manager.get_llm_studio_url())
+        self.llm_studio_edit.textChanged.connect(self.on_llm_studio_url_changed)
+        self.llm_studio_url_layout.addWidget(self.llm_studio_edit)
+        self.llm_studio_layout.addLayout(self.llm_studio_url_layout)
+
+        # Model name setting
+        self.llm_studio_model_layout = QHBoxLayout()
+        self.llm_studio_model_label = QLabel("Model Name:")
+        self.llm_studio_model_layout.addWidget(self.llm_studio_model_label)
+        self.llm_studio_model_edit = QLineEdit()
+        self.llm_studio_model_edit.setPlaceholderText("Leave empty for auto-detect")
+        self.llm_studio_model_edit.setText(self.config_manager.get_llm_studio_model())
+        self.llm_studio_model_edit.textChanged.connect(self.on_llm_studio_model_changed)
+        self.llm_studio_model_layout.addWidget(self.llm_studio_model_edit)
+        self.llm_studio_layout.addLayout(self.llm_studio_model_layout)
+
+        # OCR mode setting
+        self.ocr_mode_layout = QHBoxLayout()
+        self.ocr_mode_label = QLabel("OCR Mode:")
+        self.ocr_mode_layout.addWidget(self.ocr_mode_label)
+        self.ocr_mode_combo = QComboBox()
+        self.ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR"])
+        current_ocr_mode = self.config_manager.get_ocr_mode()
+        self.ocr_mode_combo.setCurrentIndex(0 if current_ocr_mode == 'tesseract' else 1)
+        self.ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_mode_changed)
+        self.ocr_mode_layout.addWidget(self.ocr_mode_combo)
+        self.llm_studio_layout.addLayout(self.ocr_mode_layout)
+
+        # Tesseract path setting
+        self.tesseract_path_layout = QHBoxLayout()
+        self.tesseract_path_label = QLabel("Tesseract Path:")
+        self.tesseract_path_layout.addWidget(self.tesseract_path_label)
+        self.tesseract_path_edit = QLineEdit()
+        self.tesseract_path_edit.setPlaceholderText("Leave empty to use system PATH")
+        self.tesseract_path_edit.setText(self.config_manager.get_tesseract_path())
+        self.tesseract_path_edit.textChanged.connect(self.on_tesseract_path_changed)
+        self.tesseract_path_layout.addWidget(self.tesseract_path_edit)
+        self.tesseract_browse_button = QPushButton("Browse")
+        self.tesseract_browse_button.clicked.connect(self.browse_tesseract_path)
+        self.tesseract_path_layout.addWidget(self.tesseract_browse_button)
+        
+        self.tesseract_test_button = QPushButton("Test")
+        self.tesseract_test_button.clicked.connect(self.test_tesseract)
+        self.tesseract_test_button.setToolTip("Test if Tesseract is working correctly")
+        self.tesseract_path_layout.addWidget(self.tesseract_test_button)
+        self.llm_studio_layout.addLayout(self.tesseract_path_layout)
+
+        # LibreTranslate settings (shown only when libretranslate mode is selected)
+        self.libretranslate_group = QGroupBox("LibreTranslate Settings")
+        self.libretranslate_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.translation_mode_layout.addWidget(self.libretranslate_group)
+        self.libretranslate_layout = QVBoxLayout(self.libretranslate_group)
+
+        # API URL setting
+        self.libretranslate_url_layout = QHBoxLayout()
+        self.libretranslate_url_label = QLabel("API URL:")
+        self.libretranslate_url_layout.addWidget(self.libretranslate_url_label)
+        self.libretranslate_edit = QLineEdit()
+        self.libretranslate_edit.setText(self.config_manager.get_libretranslate_url())
+        self.libretranslate_edit.textChanged.connect(self.on_libretranslate_url_changed)
+        self.libretranslate_url_layout.addWidget(self.libretranslate_edit)
+        
+        # Test connection button (inline with API URL)
+        self.libretranslate_test_button = QPushButton("Test Connection")
+        self.libretranslate_test_button.clicked.connect(self.test_libretranslate)
+        self.libretranslate_test_button.setToolTip("Test if LibreTranslate API is accessible")
+        self.libretranslate_url_layout.addWidget(self.libretranslate_test_button)
+        
+        self.libretranslate_layout.addLayout(self.libretranslate_url_layout)
+
+        # OCR mode setting for LibreTranslate
+        self.libretranslate_ocr_mode_layout = QHBoxLayout()
+        self.libretranslate_ocr_mode_label = QLabel("OCR Mode:")
+        self.libretranslate_ocr_mode_layout.addWidget(self.libretranslate_ocr_mode_label)
+        self.libretranslate_ocr_mode_combo = QComboBox()
+        self.libretranslate_ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR"])
+        current_ocr_mode = self.config_manager.get_ocr_mode()
+        self.libretranslate_ocr_mode_combo.setCurrentIndex(0 if current_ocr_mode == 'tesseract' else 1)
+        self.libretranslate_ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_mode_changed)
+        self.libretranslate_ocr_mode_layout.addWidget(self.libretranslate_ocr_mode_combo)
+        self.libretranslate_layout.addLayout(self.libretranslate_ocr_mode_layout)
+
+        # Tesseract path setting for LibreTranslate
+        self.libretranslate_tesseract_path_layout = QHBoxLayout()
+        self.libretranslate_tesseract_path_label = QLabel("Tesseract Path:")
+        self.libretranslate_tesseract_path_layout.addWidget(self.libretranslate_tesseract_path_label)
+        self.libretranslate_tesseract_path_edit = QLineEdit()
+        self.libretranslate_tesseract_path_edit.setPlaceholderText("Leave empty to use system PATH")
+        self.libretranslate_tesseract_path_edit.setText(self.config_manager.get_tesseract_path())
+        self.libretranslate_tesseract_path_edit.textChanged.connect(self.on_tesseract_path_changed)
+        self.libretranslate_tesseract_path_layout.addWidget(self.libretranslate_tesseract_path_edit)
+        self.libretranslate_tesseract_browse_button = QPushButton("Browse")
+        self.libretranslate_tesseract_browse_button.clicked.connect(self.browse_tesseract_path)
+        self.libretranslate_tesseract_path_layout.addWidget(self.libretranslate_tesseract_browse_button)
+        
+        self.libretranslate_tesseract_test_button = QPushButton("Test")
+        self.libretranslate_tesseract_test_button.clicked.connect(self.test_tesseract)
+        self.libretranslate_tesseract_test_button.setToolTip("Test if Tesseract is working correctly")
+        self.libretranslate_tesseract_path_layout.addWidget(self.libretranslate_tesseract_test_button)
+        self.libretranslate_layout.addLayout(self.libretranslate_tesseract_path_layout)
 
         # Credentials settings
         self.credentials_group = QGroupBox("Google Cloud Settings")
@@ -372,11 +676,20 @@ class MainWindow(QMainWindow):
 
         # Styling buttons
         for btn in [self.add_button, self.delete_button, self.start_button, self.browse_button,
-                    self.name_color_button, self.dialogue_color_button, self.bg_color_button, self.hotkey_apply_button]:
+                    self.name_color_button, self.dialogue_color_button, self.bg_color_button, 
+                    self.hotkey_apply_button, self.tesseract_browse_button, self.tesseract_test_button,
+                    self.libretranslate_test_button, self.libretranslate_tesseract_browse_button,
+                    self.libretranslate_tesseract_test_button]:
             btn.setStyleSheet(
                 f"QPushButton {{ background-color: {self.button_bg}; color: {self.button_fg}; padding: 5px; }}"
                 f"QPushButton:hover {{ background-color: {self.secondary_color}; }}"
             )
+        
+        # Show/hide credentials group based on mode
+        self.on_translation_mode_changed()
+        
+        # Initialize Tesseract path field visibility based on OCR mode
+        self.on_ocr_mode_changed()
 
         # Translation windows
         self.area_selected = False
@@ -434,6 +747,11 @@ class MainWindow(QMainWindow):
             self.save_area_config(area_id, x, y, w, h)
             self.area_selected = True
             self.update_button_states()
+            
+            # Select the newly added area and automatically start translation
+            self.areas_tree.setCurrentItem(item)
+            # Use QTimer.singleShot to ensure UI is updated before starting translation
+            QTimer.singleShot(100, self.start_translation)
         self.show()
 
     def delete_area(self):
@@ -541,7 +859,9 @@ class MainWindow(QMainWindow):
                 'opacity': self.opacity_edit.text(),
                 'toggle_hotkey': self.hotkey_input.text() or 'Ctrl+1',
                 'auto_pause_enabled': self.auto_pause_checkbox.isChecked(),
-                'auto_pause_threshold': self.auto_pause_threshold_spinbox.value()
+                'auto_pause_threshold': self.auto_pause_threshold_spinbox.value(),
+                'translation_mode': self.config_manager.get_translation_mode(),
+                'llm_studio_url': self.config_manager.get_llm_studio_url()
             }
             logger.info(f"Translation settings: {settings}")
             
@@ -555,6 +875,8 @@ class MainWindow(QMainWindow):
             )
             translation_window.set_region((x, y, w, h))
             translation_window.running = True
+            translation_window.is_capturing = True  # Enable capturing automatically
+            translation_window.update_capture_button_state()  # Update button state
             translation_window.timer.start(1000)
             self.translation_windows[area_id] = translation_window
             
@@ -619,6 +941,12 @@ class MainWindow(QMainWindow):
                 if reply == QMessageBox.No:
                     event.ignore()
                     return
+            
+            # Unregister add area hotkey
+            self.unregister_add_area_hotkey()
+            
+            # Unregister add area hotkey
+            self.unregister_add_area_hotkey()
             
             # Save window position
             if self.config_manager:
@@ -708,6 +1036,12 @@ class MainWindow(QMainWindow):
                 # Apply button should be disabled when settings are disabled OR when no changes are made
                 has_changes = hasattr(self, 'original_hotkey') and self.hotkey_input.text() != self.original_hotkey
                 self.hotkey_apply_button.setEnabled(enabled and has_changes)
+            if hasattr(self, 'add_area_hotkey_input'):
+                self.add_area_hotkey_input.setEnabled(enabled)
+            if hasattr(self, 'add_area_hotkey_apply_button'):
+                # Apply button should be disabled when settings are disabled OR when no changes are made
+                has_changes = hasattr(self, 'original_add_area_hotkey') and self.add_area_hotkey_input.text() != self.original_add_area_hotkey
+                self.add_area_hotkey_apply_button.setEnabled(enabled and has_changes)
             
             # Auto-pause settings
             if hasattr(self, 'auto_pause_checkbox'):
@@ -720,6 +1054,34 @@ class MainWindow(QMainWindow):
                 self.credentials_edit.setEnabled(enabled)
             if hasattr(self, 'browse_button'):
                 self.browse_button.setEnabled(enabled)
+            
+            # Translation mode settings
+            if hasattr(self, 'mode_combo'):
+                self.mode_combo.setEnabled(enabled)
+            if hasattr(self, 'llm_studio_edit'):
+                self.llm_studio_edit.setEnabled(enabled)
+            if hasattr(self, 'llm_studio_model_edit'):
+                self.llm_studio_model_edit.setEnabled(enabled)
+            if hasattr(self, 'tesseract_path_edit'):
+                self.tesseract_path_edit.setEnabled(enabled)
+            if hasattr(self, 'tesseract_browse_button'):
+                self.tesseract_browse_button.setEnabled(enabled)
+            if hasattr(self, 'tesseract_test_button'):
+                self.tesseract_test_button.setEnabled(enabled)
+            if hasattr(self, 'ocr_mode_combo'):
+                self.ocr_mode_combo.setEnabled(enabled)
+            if hasattr(self, 'libretranslate_edit'):
+                self.libretranslate_edit.setEnabled(enabled)
+            if hasattr(self, 'libretranslate_test_button'):
+                self.libretranslate_test_button.setEnabled(enabled)
+            if hasattr(self, 'libretranslate_ocr_mode_combo'):
+                self.libretranslate_ocr_mode_combo.setEnabled(enabled)
+            if hasattr(self, 'libretranslate_tesseract_path_edit'):
+                self.libretranslate_tesseract_path_edit.setEnabled(enabled)
+            if hasattr(self, 'libretranslate_tesseract_browse_button'):
+                self.libretranslate_tesseract_browse_button.setEnabled(enabled)
+            if hasattr(self, 'libretranslate_tesseract_test_button'):
+                self.libretranslate_tesseract_test_button.setEnabled(enabled)
             
             # Area management buttons - always enabled
             if hasattr(self, 'add_button'):
@@ -989,6 +1351,149 @@ class MainWindow(QMainWindow):
         
         return has_modifier
     
+    def parse_hotkey(self, hotkey: str):
+        """Parse hotkey string and return (modifier, virtual_key) tuple."""
+        if not IS_WINDOWS:
+            return (0, 0)
+        
+        parts = hotkey.split('+')
+        modifier = 0
+        key = None
+        
+        # Parse each part
+        for part in parts:
+            part_upper = part.strip().upper()
+            
+            # Check for modifiers
+            if part_upper == 'CTRL':
+                modifier |= MOD_CONTROL
+            elif part_upper == 'SHIFT':
+                modifier |= MOD_SHIFT
+            elif part_upper == 'ALT':
+                modifier |= MOD_ALT
+            else:
+                # This should be the key
+                if part_upper in VK_CODES:
+                    key = VK_CODES[part_upper]
+                elif part in VK_CODES:
+                    key = VK_CODES[part]
+                else:
+                    logger.warning(f"Unknown key in hotkey: {part}")
+        
+        # Default to VK_2 if no key was found
+        if key is None:
+            logger.warning(f"No valid key found in hotkey '{hotkey}', defaulting to '2'")
+            key = VK_CODES.get('2', 0x32)
+        
+        return (modifier, key)
+    
+    def register_add_area_hotkey(self):
+        """Register a system-wide hotkey for adding translation areas."""
+        if not IS_WINDOWS:
+            logger.info("Global hotkey registration is only supported on Windows")
+            return
+        
+        if self.add_area_hotkey_id is not None:
+            logger.info("Add area hotkey already registered")
+            return
+        
+        app = QCoreApplication.instance()
+        if app is None:
+            logger.warning("No QCoreApplication instance; cannot register global hotkey")
+            return
+        
+        if self.add_area_hotkey_filter is None:
+            self.add_area_hotkey_filter = WindowsHotkeyFilterMain(self.on_add_area_hotkey_triggered)
+            app.installNativeEventFilter(self.add_area_hotkey_filter)
+        
+        # Use a unique ID for the add area hotkey
+        self.add_area_hotkey_id = HOTKEY_ID_BASE_MAIN + 1
+        user32 = ctypes.windll.user32
+        
+        # Parse the hotkey from settings
+        hotkey = self.config_manager.get_add_area_hotkey()
+        modifier, vk_key = self.parse_hotkey(hotkey)
+        
+        if not user32.RegisterHotKey(None, self.add_area_hotkey_id, modifier, vk_key):
+            error_code = ctypes.windll.kernel32.GetLastError()
+            logger.error(f"Failed to register add area hotkey {hotkey} (error {error_code})")
+            self.add_area_hotkey_id = None
+            return
+        
+        if self.add_area_hotkey_filter:
+            self.add_area_hotkey_filter.set_hotkey_id(self.add_area_hotkey_id)
+        
+        logger.info(f"Add area hotkey {hotkey} registered")
+    
+    def unregister_add_area_hotkey(self):
+        """Remove the system-wide add area hotkey."""
+        if not IS_WINDOWS:
+            return
+        
+        if self.add_area_hotkey_id is not None:
+            user32 = ctypes.windll.user32
+            user32.UnregisterHotKey(None, self.add_area_hotkey_id)
+            self.add_area_hotkey_id = None
+        
+        if self.add_area_hotkey_filter is not None:
+            app = QCoreApplication.instance()
+            if app:
+                app.removeNativeEventFilter(self.add_area_hotkey_filter)
+            self.add_area_hotkey_filter = None
+            logger.info("Add area hotkey listener removed")
+    
+    def on_add_area_hotkey_triggered(self):
+        """Handle add area hotkey events."""
+        hotkey = self.config_manager.get_add_area_hotkey()
+        logger.info(f"Add area hotkey {hotkey} triggered")
+        self.add_area()
+    
+    def on_add_area_hotkey_changed(self):
+        """Handle add area hotkey input changes."""
+        try:
+            current_hotkey = self.add_area_hotkey_input.text()
+            # Enable apply button only if hotkey has changed and is not empty
+            if hasattr(self, 'add_area_hotkey_apply_button'):
+                self.add_area_hotkey_apply_button.setEnabled(
+                    bool(current_hotkey) and current_hotkey != self.original_add_area_hotkey
+                )
+        except Exception as e:
+            logger.error(f"Error handling add area hotkey change: {str(e)}", exc_info=True)
+    
+    def update_add_area_hotkey_setting(self):
+        """Update add area hotkey setting when Apply button is clicked."""
+        try:
+            hotkey = self.add_area_hotkey_input.text()
+            if not hotkey:
+                QMessageBox.warning(self, "Invalid Hotkey", "Please enter a valid hotkey combination.")
+                return
+            
+            # Validate hotkey format
+            if not self.validate_hotkey(hotkey):
+                QMessageBox.warning(self, "Invalid Hotkey", 
+                                   "Invalid hotkey format. Please use a combination like:\n"
+                                   "- Ctrl+2, Ctrl+Shift+A, Alt+F1, etc.")
+                return
+            
+            # Unregister old hotkey
+            self.unregister_add_area_hotkey()
+            
+            # Update config
+            self.config_manager.set_add_area_hotkey(hotkey)
+            self.original_add_area_hotkey = hotkey
+            self.add_area_hotkey_apply_button.setEnabled(False)
+            
+            # Register new hotkey
+            if IS_WINDOWS:
+                QTimer.singleShot(100, self.register_add_area_hotkey)
+            
+            QMessageBox.information(self, "Hotkey Updated", 
+                                   f"Add area hotkey changed to {hotkey}\n\n"
+                                   "The new hotkey is now active.")
+        except Exception as e:
+            logger.error(f"Error updating add area hotkey: {str(e)}", exc_info=True)
+            show_error_message(self, "Error", f"Failed to update hotkey: {str(e)}")
+    
     def update_auto_pause_settings(self):
         """Update auto-pause settings for all translation windows."""
         try:
@@ -1049,3 +1554,445 @@ class MainWindow(QMainWindow):
                 self.config_manager.set_global_setting('last_update_check', '0')
             except:
                 pass
+    
+    def on_translation_mode_changed(self):
+        """Handle translation mode change."""
+        try:
+            mode_index = self.mode_combo.currentIndex()
+            if mode_index == 0:
+                mode = 'google'
+            elif mode_index == 1:
+                mode = 'local'
+            else:  # mode_index == 2
+                mode = 'libretranslate'
+            self.config_manager.set_translation_mode(mode)
+            self.update_translation_mode_ui()
+            logger.info(f"Translation mode changed to: {mode}")
+        except Exception as e:
+            logger.error(f"Error changing translation mode: {str(e)}", exc_info=True)
+    
+    def update_translation_mode_ui(self):
+        """Update UI based on selected translation mode."""
+        try:
+            mode = self.config_manager.get_translation_mode()
+            is_local_mode = (mode == 'local')
+            is_libretranslate_mode = (mode == 'libretranslate')
+            
+            # Show/hide LLM Studio settings (if it exists)
+            if hasattr(self, 'llm_studio_group'):
+                self.llm_studio_group.setVisible(is_local_mode)
+            
+            # Show/hide LibreTranslate settings (if it exists)
+            if hasattr(self, 'libretranslate_group'):
+                self.libretranslate_group.setVisible(is_libretranslate_mode)
+            
+            # Show/hide Google Cloud credentials (if it exists)
+            if hasattr(self, 'credentials_group'):
+                self.credentials_group.setVisible(not is_local_mode and not is_libretranslate_mode)
+            
+            # Update Tesseract path field visibility based on OCR mode
+            if is_local_mode or is_libretranslate_mode:
+                ocr_mode = self.config_manager.get_ocr_mode()
+                is_tesseract_mode = (ocr_mode == 'tesseract')
+                if hasattr(self, 'tesseract_path_layout'):
+                    for i in range(self.tesseract_path_layout.count()):
+                        widget = self.tesseract_path_layout.itemAt(i).widget()
+                        if widget:
+                            widget.setVisible(is_tesseract_mode)
+                if hasattr(self, 'libretranslate_tesseract_path_layout'):
+                    for i in range(self.libretranslate_tesseract_path_layout.count()):
+                        widget = self.libretranslate_tesseract_path_layout.itemAt(i).widget()
+                        if widget:
+                            widget.setVisible(is_tesseract_mode)
+        except Exception as e:
+            logger.error(f"Error updating translation mode UI: {str(e)}", exc_info=True)
+    
+    def on_llm_studio_url_changed(self):
+        """Handle LLM Studio URL change."""
+        try:
+            url = self.llm_studio_edit.text()
+            if url:
+                self.config_manager.set_llm_studio_url(url)
+                logger.info(f"LLM Studio URL changed to: {url}")
+        except Exception as e:
+            logger.error(f"Error changing LLM Studio URL: {str(e)}", exc_info=True)
+    
+    def on_llm_studio_model_changed(self):
+        """Handle LLM Studio model name change."""
+        try:
+            model = self.llm_studio_model_edit.text()
+            self.config_manager.set_llm_studio_model(model)
+            logger.info(f"LLM Studio model changed to: {model if model else 'auto-detect'}")
+        except Exception as e:
+            logger.error(f"Error changing LLM Studio model: {str(e)}", exc_info=True)
+    
+    def on_ocr_mode_changed(self):
+        """Handle OCR mode change."""
+        try:
+            # Get the sender widget to determine which combo changed
+            sender = self.sender()
+            mode_index = None
+            
+            if hasattr(self, 'ocr_mode_combo') and sender == self.ocr_mode_combo:
+                mode_index = self.ocr_mode_combo.currentIndex()
+            elif hasattr(self, 'libretranslate_ocr_mode_combo') and sender == self.libretranslate_ocr_mode_combo:
+                mode_index = self.libretranslate_ocr_mode_combo.currentIndex()
+            else:
+                # Fallback to current config value (used during initialization)
+                current_mode = self.config_manager.get_ocr_mode()
+                mode_index = 0 if current_mode == 'tesseract' else 1
+            
+            mode = 'tesseract' if mode_index == 0 else 'paddleocr'
+            
+            # Only update config if sender is not None (i.e., user changed it)
+            if sender is not None:
+                self.config_manager.set_ocr_mode(mode)
+            
+            # Sync both OCR mode combos if they exist
+            if hasattr(self, 'ocr_mode_combo') and sender != self.ocr_mode_combo:
+                self.ocr_mode_combo.blockSignals(True)
+                self.ocr_mode_combo.setCurrentIndex(mode_index)
+                self.ocr_mode_combo.blockSignals(False)
+            if hasattr(self, 'libretranslate_ocr_mode_combo') and sender != self.libretranslate_ocr_mode_combo:
+                self.libretranslate_ocr_mode_combo.blockSignals(True)
+                self.libretranslate_ocr_mode_combo.setCurrentIndex(mode_index)
+                self.libretranslate_ocr_mode_combo.blockSignals(False)
+            
+            # Update Tesseract path field visibility based on OCR mode
+            is_tesseract_mode = (mode == 'tesseract')
+            if hasattr(self, 'tesseract_path_layout'):
+                for i in range(self.tesseract_path_layout.count()):
+                    widget = self.tesseract_path_layout.itemAt(i).widget()
+                    if widget:
+                        widget.setVisible(is_tesseract_mode)
+            if hasattr(self, 'libretranslate_tesseract_path_layout'):
+                for i in range(self.libretranslate_tesseract_path_layout.count()):
+                    widget = self.libretranslate_tesseract_path_layout.itemAt(i).widget()
+                    if widget:
+                        widget.setVisible(is_tesseract_mode)
+            
+            logger.info(f"OCR mode changed to: {mode}")
+        except Exception as e:
+            logger.error(f"Error changing OCR mode: {str(e)}", exc_info=True)
+    
+    def on_tesseract_path_changed(self):
+        """Handle Tesseract path change."""
+        try:
+            # Get the sender widget to determine which field changed
+            sender = self.sender()
+            if sender == self.tesseract_path_edit:
+                path = self.tesseract_path_edit.text().strip()
+            elif hasattr(self, 'libretranslate_tesseract_path_edit') and sender == self.libretranslate_tesseract_path_edit:
+                path = self.libretranslate_tesseract_path_edit.text().strip()
+            else:
+                # Fallback: try to get from whichever is visible
+                if hasattr(self, 'tesseract_path_edit') and self.tesseract_path_edit.isVisible():
+                    path = self.tesseract_path_edit.text().strip()
+                elif hasattr(self, 'libretranslate_tesseract_path_edit') and self.libretranslate_tesseract_path_edit.isVisible():
+                    path = self.libretranslate_tesseract_path_edit.text().strip()
+                else:
+                    path = self.config_manager.get_tesseract_path()
+            
+            if path:
+                # Validate path if provided
+                if not os.path.exists(path):
+                    logger.warning(f"Tesseract path does not exist: {path}")
+                elif not os.path.isfile(path):
+                    logger.warning(f"Tesseract path is not a file: {path}")
+                elif os.name == 'nt' and not path.lower().endswith('.exe'):
+                    logger.warning(f"Tesseract path should point to .exe file: {path}")
+            
+            self.config_manager.set_tesseract_path(path)
+            
+            # Sync both fields if they exist (to keep them in sync)
+            if hasattr(self, 'tesseract_path_edit') and sender != self.tesseract_path_edit:
+                self.tesseract_path_edit.blockSignals(True)
+                self.tesseract_path_edit.setText(path)
+                self.tesseract_path_edit.blockSignals(False)
+            if hasattr(self, 'libretranslate_tesseract_path_edit') and sender != self.libretranslate_tesseract_path_edit:
+                self.libretranslate_tesseract_path_edit.blockSignals(True)
+                self.libretranslate_tesseract_path_edit.setText(path)
+                self.libretranslate_tesseract_path_edit.blockSignals(False)
+            
+            logger.info(f"Tesseract path changed to: {path if path else 'system PATH'}")
+        except Exception as e:
+            logger.error(f"Error changing Tesseract path: {str(e)}", exc_info=True)
+    
+    def browse_tesseract_path(self):
+        """Browse for Tesseract executable."""
+        app = QApplication.instance()
+        if not app:
+            app = QApplication([])
+        
+        # On Windows, Tesseract is typically tesseract.exe
+        # Default to common installation locations
+        default_paths = [
+            r"C:\Program Files\Tesseract-OCR",
+            r"C:\Program Files (x86)\Tesseract-OCR",
+            os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR")
+        ]
+        
+        start_dir = ""
+        for path in default_paths:
+            if os.path.exists(path):
+                start_dir = path
+                break
+        
+        file_name, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Tesseract Executable (tesseract.exe)",
+            start_dir,
+            "Executable Files (*.exe);;All Files (*)"
+        )
+        if file_name:
+            # Validate that it's actually tesseract.exe
+            if not file_name.lower().endswith('.exe'):
+                QMessageBox.warning(
+                    self,
+                    "Invalid File",
+                    "Please select the tesseract.exe executable file."
+                )
+                return
+            
+            # Check if file exists and is accessible
+            if not os.path.exists(file_name):
+                QMessageBox.warning(
+                    self,
+                    "File Not Found",
+                    f"The selected file does not exist:\n{file_name}"
+                )
+                return
+            
+            if not os.path.isfile(file_name):
+                QMessageBox.warning(
+                    self,
+                    "Invalid Selection",
+                    f"The selected path is not a file:\n{file_name}\n\nPlease select tesseract.exe"
+                )
+                return
+            
+            # Check if file is accessible
+            if not os.access(file_name, os.R_OK):
+                QMessageBox.warning(
+                    self,
+                    "Access Warning",
+                    f"Cannot read the selected file:\n{file_name}\n\n"
+                    "You may need to run the application as Administrator."
+                )
+            
+            # Check if file is executable (on Windows, .exe files should be executable)
+            if os.name == 'nt' and not os.access(file_name, os.X_OK):
+                reply = QMessageBox.question(
+                    self,
+                    "Permission Warning",
+                    f"The file may not be executable:\n{file_name}\n\n"
+                    "This might cause permission errors.\n"
+                    "Do you want to continue anyway?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if reply == QMessageBox.No:
+                    return
+            
+            # Update both Tesseract path fields if they exist
+            if hasattr(self, 'tesseract_path_edit'):
+                self.tesseract_path_edit.blockSignals(True)
+                self.tesseract_path_edit.setText(file_name)
+                self.tesseract_path_edit.blockSignals(False)
+            if hasattr(self, 'libretranslate_tesseract_path_edit'):
+                self.libretranslate_tesseract_path_edit.blockSignals(True)
+                self.libretranslate_tesseract_path_edit.setText(file_name)
+                self.libretranslate_tesseract_path_edit.blockSignals(False)
+            
+            self.config_manager.set_tesseract_path(file_name)
+            logger.info(f"Tesseract path configured: {file_name}")
+            
+            # Show success message
+            QMessageBox.information(
+                self,
+                "Path Configured",
+                f"Tesseract path has been set to:\n{file_name}\n\n"
+                "The path will be used for text detection in Local LM and LibreTranslate modes.\n"
+                "Click 'Test' to verify Tesseract is working."
+            )
+    
+    def test_tesseract(self):
+        """Test if Tesseract is working correctly."""
+        try:
+            from src.text_processing import TextProcessor
+            import numpy as np
+            from PIL import Image
+            
+            # Get the configured path
+            tesseract_path = self.config_manager.get_tesseract_path()
+            
+            # Try to import pytesseract
+            try:
+                import pytesseract
+            except ImportError:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    "pytesseract is not installed.\n\n"
+                    "Please install it using:\npip install pytesseract"
+                )
+                return
+            
+            # Configure path if set
+            if tesseract_path:
+                if not os.path.exists(tesseract_path):
+                    QMessageBox.warning(
+                        self,
+                        "Test Failed",
+                        f"Tesseract path does not exist:\n{tesseract_path}\n\n"
+                        "Please check the path and try again."
+                    )
+                    return
+                
+                # Check file permissions before attempting to use it
+                if not os.access(tesseract_path, os.X_OK):
+                    QMessageBox.warning(
+                        self,
+                        "Permission Warning",
+                        f"The Tesseract executable may not be accessible:\n{tesseract_path}\n\n"
+                        "The file exists but may have permission restrictions.\n"
+                        "Try running the application as Administrator."
+                    )
+                
+                pytesseract.pytesseract.tesseract_cmd = tesseract_path
+            
+            # Create a simple test image with text
+            test_image = Image.new('RGB', (200, 50), color='white')
+            from PIL import ImageDraw, ImageFont
+            draw = ImageDraw.Draw(test_image)
+            try:
+                # Try to use a default font
+                font = ImageFont.load_default()
+            except:
+                font = None
+            draw.text((10, 10), "Test 123", fill='black', font=font)
+            
+            # Convert to numpy array
+            test_array = np.array(test_image)
+            
+            # Try to extract text
+            try:
+                text = pytesseract.image_to_string(test_array, lang='eng')
+                if text.strip():
+                    QMessageBox.information(
+                        self,
+                        "Test Successful",
+                        f"Tesseract is working correctly!\n\n"
+                        f"Path: {tesseract_path if tesseract_path else 'System PATH'}\n"
+                        f"Detected text: '{text.strip()}'"
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Test Warning",
+                        "Tesseract executed but did not detect text.\n\n"
+                        "This might be normal for simple test images.\n"
+                        "Try using it with actual screen captures."
+                    )
+            except Exception as e:
+                error_msg = str(e)
+                if 'not found' in error_msg.lower() or 'tesseract' in error_msg.lower():
+                    QMessageBox.critical(
+                        self,
+                        "Test Failed",
+                        f"Tesseract not found:\n{error_msg}\n\n"
+                        "Please:\n"
+                        "1. Install Tesseract OCR\n"
+                        "2. Configure the correct path\n"
+                        "3. Ensure it's in your system PATH"
+                    )
+                elif 'access' in error_msg.lower() or 'permission' in error_msg.lower() or 'winerror 5' in error_msg.lower():
+                    detailed_msg = (
+                        f"Permission denied:\n{error_msg}\n\n"
+                        "This error usually occurs when:\n"
+                        "• Windows Defender or antivirus blocks Tesseract\n"
+                        "• The file is in a protected location (Program Files)\n"
+                        "• User Account Control (UAC) restrictions\n\n"
+                        "Solutions (try in order):\n\n"
+                        "1. Run as Administrator:\n"
+                        "   Right-click the application → 'Run as administrator'\n\n"
+                        "2. Add Tesseract to antivirus exclusions:\n"
+                        "   Windows Security → Virus & threat protection →\n"
+                        "   Manage settings → Exclusions → Add folder\n\n"
+                        "3. Reinstall Tesseract to a user folder:\n"
+                        "   Install to: C:\\Tesseract-OCR (instead of Program Files)\n\n"
+                        "4. Check file permissions:\n"
+                        "   Right-click tesseract.exe → Properties → Security\n"
+                        "   Ensure your user has 'Execute' permission"
+                    )
+                    QMessageBox.critical(
+                        self,
+                        "Test Failed - Permission Denied",
+                        detailed_msg
+                    )
+                else:
+                    QMessageBox.critical(
+                        self,
+                        "Test Failed",
+                        f"Error testing Tesseract:\n{error_msg}"
+                    )
+        except Exception as e:
+            logger.error(f"Error testing Tesseract: {str(e)}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Test Error",
+                f"An error occurred while testing Tesseract:\n{str(e)}"
+            )
+    
+    def on_libretranslate_url_changed(self):
+        """Handle LibreTranslate URL change."""
+        try:
+            url = self.libretranslate_edit.text()
+            if url:
+                self.config_manager.set_libretranslate_url(url)
+                logger.info(f"LibreTranslate URL changed to: {url}")
+        except Exception as e:
+            logger.error(f"Error changing LibreTranslate URL: {str(e)}", exc_info=True)
+    
+    def test_libretranslate(self):
+        """Test if LibreTranslate API is accessible."""
+        try:
+            from src.translator.libretranslate_translator import LibreTranslateTranslator
+            from PyQt5.QtWidgets import QMessageBox
+            
+            url = self.libretranslate_edit.text() or self.config_manager.get_libretranslate_url()
+            if not url:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    "Please enter a LibreTranslate API URL."
+                )
+                return
+            
+            translator = LibreTranslateTranslator(url)
+            if translator.test_connection():
+                QMessageBox.information(
+                    self,
+                    "Test Successful",
+                    f"LibreTranslate connection successful!\n\n"
+                    f"API URL: {url}\n\n"
+                    "The API is ready to use."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    f"Could not connect to LibreTranslate API.\n\n"
+                    f"API URL: {url}\n\n"
+                    "Please check:\n"
+                    "1. The LibreTranslate server is running\n"
+                    "2. The URL is correct\n"
+                    "3. The server is accessible from this computer"
+                )
+        except Exception as e:
+            logger.error(f"Error testing LibreTranslate: {str(e)}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Test Error",
+                f"An error occurred while testing LibreTranslate:\n{str(e)}"
+            )

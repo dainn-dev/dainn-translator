@@ -56,7 +56,14 @@ a = Analysis(
         'requests',
         'html',
         'ctypes',
-        'ctypes.wintypes'
+        'ctypes.wintypes',
+        
+        # OCR support (Tesseract)
+        'pytesseract',
+        
+        # LLM Studio translator
+        'src.translator.llm_studio_translator',
+        'src.translator'
     ],
     hookspath=[],
     hooksconfig={},
@@ -76,8 +83,8 @@ a = Analysis(
         # Unused ML/AI frameworks
         'torch', 'torchvision', 'tensorflow', 'keras',
         
-        # Unused OCR libraries
-        'easyocr', 'pytesseract', 'tesseract',
+        # Unused OCR libraries (keep pytesseract, exclude others)
+        'easyocr',
         
         # Unused Google Cloud services
         'google.cloud.storage', 'google.cloud.bigquery', 'google.cloud.pubsub',
