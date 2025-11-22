@@ -11,4 +11,6 @@ requests>=2.31.0
 pytesseract>=0.3.10
 paddlepaddle>=2.5.0
 paddleocr>=2.7.0  # Supports PP-OCRv4 model for improved accuracy
+easyocr>=1.7.0  # EasyOCR support for 80+ languages
+owocr>=1.19.0  # OneOCR and Windows OCR support
 importlib-metadata>=4.0.0; python_version<"3.10"

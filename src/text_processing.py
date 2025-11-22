@@ -1,6 +1,8 @@
 from typing import Dict, List, Optional, Tuple
 import os
 import json
+import sys
+import io
 from datetime import datetime
 from google.cloud import translate_v2 as translate
 from google.cloud import vision
@@ -12,35 +14,114 @@ import cv2
 
 logger = logging.getLogger(__name__)
 
+# Helper function to safely import owocr, catching DLL errors
+def safe_import_owocr():
+    """Safely import owocr, catching DLL errors that shouldn't prevent Windows OCR."""
+    try:
+        # Suppress stderr to catch DLL errors
+        old_stderr = sys.stderr
+        sys.stderr = io.StringIO()
+        try:
+            from owocr import OCR
+            stderr_output = sys.stderr.getvalue()
+            sys.stderr = old_stderr
+            
+            # Check if there were DLL errors in stderr
+            if stderr_output and 'dll' in stderr_output.lower():
+                logger.warning("DLL error detected during import (this is expected if some DLLs are missing)")
+                # The import succeeded, so Windows OCR should still work
+                return OCR, True
+            else:
+                return OCR, True
+        except ImportError as e:
+            sys.stderr = old_stderr
+            # ImportError means the module is not installed, not a DLL issue
+            logger.debug(f"owocr not installed: {str(e)}")
+            return None, False
+        except Exception as e:
+            sys.stderr = old_stderr
+            error_str = str(e).lower()
+            if 'dll' in error_str:
+                # DLL error - this is expected and shouldn't prevent Windows OCR
+                logger.warning(f"DLL error during import (expected): {str(e)}")
+                # Don't try to import again - it will likely fail the same way
+                return None, False
+            else:
+                # Other errors - log and return None
+                logger.warning(f"Error importing owocr: {str(e)}")
+                return None, False
+    except Exception as e:
+        logger.warning(f"Unexpected error in safe_import_owocr: {str(e)}")
+        return None, False
+
+# OCR and translator availability flags
+TESSERACT_AVAILABLE = False
+PADDLEOCR_AVAILABLE = False
+EASYOCR_AVAILABLE = False
+WINDOW_OCR_AVAILABLE = False
+WINDOW_OCR_OWOCR = False
+OWOCR = None  # Initialize to None - will be imported lazily when needed
+
 # Try to import optional dependencies
-try:
-    import pytesseract
-    TESSERACT_AVAILABLE = True
-except ImportError:
-    TESSERACT_AVAILABLE = False
-    logger.warning("pytesseract not available. Install it to use local OCR mode.")
+_OPTIONAL_IMPORTS = {
+    'pytesseract': ('TESSERACT_AVAILABLE', 'pytesseract not available. Install it to use local OCR mode.'),
+    'paddleocr': ('PADDLEOCR_AVAILABLE', 'PaddleOCR not available. Install it to use PaddleOCR mode.'),
+    'easyocr': ('EASYOCR_AVAILABLE', 'EasyOCR not available. Install it to use EasyOCR mode.'),
+}
 
-try:
-    from src.translator.llm_studio_translator import LLMStudioTranslator
-    LLM_STUDIO_AVAILABLE = True
-except ImportError:
-    LLM_STUDIO_AVAILABLE = False
-    logger.warning("LLM Studio translator not available.")
+for module_name, (flag_name, warning_msg) in _OPTIONAL_IMPORTS.items():
+    try:
+        if module_name == 'pytesseract':
+            import pytesseract
+        elif module_name == 'paddleocr':
+            from paddleocr import PaddleOCR
+        elif module_name == 'easyocr':
+            import easyocr
+        globals()[flag_name] = True
+    except ImportError:
+        globals()[flag_name] = False
+        logger.warning(warning_msg)
 
-try:
-    from src.translator.libretranslate_translator import LibreTranslateTranslator
-    LIBRETRANSLATE_AVAILABLE = True
-except ImportError:
-    LIBRETRANSLATE_AVAILABLE = False
-    logger.warning("LibreTranslate translator not available.")
+# Windows OCR - lazy import to avoid hanging during module load
+if os.name == 'nt':  # Windows only
+    WINDOW_OCR_AVAILABLE = True  # Assume available, will verify when used
+    WINDOW_OCR_OWOCR = True  # Assume owocr will work, will verify when used
+    logger.debug("Windows OCR: Marked as potentially available (lazy import)")
+else:
+    logger.warning("Windows OCR is only available on Windows.")
 
-# Try to import PaddleOCR
-try:
-    from paddleocr import PaddleOCR
-    PADDLEOCR_AVAILABLE = True
-except ImportError:
-    PADDLEOCR_AVAILABLE = False
-    logger.warning("PaddleOCR not available. Install it to use PaddleOCR mode.")
+
+# Function to check OCR engine availability
+def check_ocr_availability(ocr_mode: str) -> bool:
+    """Check if an OCR engine is available."""
+    try:
+        if ocr_mode == 'tesseract':
+            return TESSERACT_AVAILABLE
+        elif ocr_mode == 'paddleocr':
+            return PADDLEOCR_AVAILABLE
+        elif ocr_mode == 'window_ocr':
+            return WINDOW_OCR_AVAILABLE
+        elif ocr_mode == 'easyocr':
+            return EASYOCR_AVAILABLE
+        return False
+    except (NameError, AttributeError) as e:
+        # Handle case where variables might not be defined
+        logger.warning(f"OCR availability variable not found for {ocr_mode}: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Error checking OCR availability for {ocr_mode}: {str(e)}", exc_info=True)
+        return False
+
+# Function to get installation command for OCR engine
+def get_ocr_install_command(ocr_mode: str) -> str:
+    """Get the pip install command for an OCR engine."""
+    install_commands = {
+        'tesseract': 'pip install pytesseract',
+        'paddleocr': 'pip install paddlepaddle paddleocr',
+        'window_ocr': 'pip install owocr[winocr]',
+        'easyocr': 'pip install easyocr'
+    }
+    return install_commands.get(ocr_mode, '')
 
 class TextProcessor:
     """Handle text translation and history logging."""
@@ -49,12 +130,20 @@ class TextProcessor:
                  vision_client: Optional[vision.ImageAnnotatorClient] = None,
                  llm_studio_translator: Optional['LLMStudioTranslator'] = None,
                  libretranslate_translator: Optional['LibreTranslateTranslator'] = None,
+                 ollama_translator: Optional['OllamaTranslator'] = None,
+                 chatgpt_translator: Optional['ChatGPTTranslator'] = None,
+                 gemini_translator: Optional['GeminiTranslator'] = None,
+                 mistral_translator: Optional['MistralTranslator'] = None,
                  cache_size: int = None):
         logger.info("Initializing TextProcessor...")
         self.translate_client = translate_client
         self.vision_client = vision_client
         self.llm_studio_translator = llm_studio_translator
         self.libretranslate_translator = libretranslate_translator
+        self.ollama_translator = ollama_translator
+        self.chatgpt_translator = chatgpt_translator
+        self.gemini_translator = gemini_translator
+        self.mistral_translator = mistral_translator
         self.translation_cache = OrderedDict()
         self.max_cache_size = cache_size  # None means unlimited
         self.api_quota_limit = None  # None means unlimited
@@ -64,21 +153,53 @@ class TextProcessor:
         self.config_manager = ConfigManager()
         self.translation_history: List[Dict] = []
         logger.info("TextProcessor initialization complete.")
+    
+    @staticmethod
+    def _prepare_image_for_ocr(image: np.ndarray) -> np.ndarray:
+        """Prepare image for OCR processing (ensure RGB format)."""
+        # pyautogui.screenshot() returns RGB, so use it directly
+        if len(image.shape) == 3 and image.shape[2] == 3:
+            return image
+        return image
 
     def detect_text(self, image: np.ndarray) -> str:
-        """Detect text in an image using Google Cloud Vision API, Tesseract OCR, or PaddleOCR."""
-        translation_mode = self.config_manager.get_translation_mode()
-        
-        if translation_mode == 'local' or translation_mode == 'libretranslate':
-            # Use local OCR (Tesseract or PaddleOCR) for local mode and libretranslate mode
-            ocr_mode = self.config_manager.get_ocr_mode()
-            if ocr_mode == 'paddleocr':
-                return self._detect_text_paddleocr(image)
+        """Detect text in an image using Google Cloud Vision API, Tesseract OCR, PaddleOCR, Windows OCR, or EasyOCR."""
+        try:
+            # Validate image input
+            if image is None or image.size == 0:
+                logger.warning("Empty or invalid image passed to detect_text")
+                return ""
+            
+            # Ensure image is in correct format (numpy array)
+            if not isinstance(image, np.ndarray):
+                logger.error(f"Image is not a numpy array: {type(image)}")
+                return ""
+            
+            # Log image info for debugging
+            logger.debug(f"Image shape: {image.shape}, dtype: {image.dtype}, min: {image.min()}, max: {image.max()}")
+            
+            translation_mode = self.config_manager.get_translation_mode()
+            
+            # Use local OCR for non-Google translation modes
+            if translation_mode in ('local', 'libretranslate', 'ollama', 'chatgpt', 'gemini', 'mistral'):
+                ocr_mode = self.config_manager.get_ocr_mode()
+                logger.debug(f"Using OCR mode: {ocr_mode}, Translation mode: {translation_mode}")
+                
+                # OCR mode to method mapping
+                ocr_handlers = {
+                    'paddleocr': self._detect_text_paddleocr,
+                    'window_ocr': self._detect_text_window_ocr,
+                    'easyocr': self._detect_text_easyocr,
+                }
+                
+                handler = ocr_handlers.get(ocr_mode, self._detect_text_tesseract)
+                return handler(image)
             else:
-                return self._detect_text_tesseract(image)
-        else:
-            # Use Google Cloud Vision API
-            return self._detect_text_google_vision(image)
+                # Use Google Cloud Vision API
+                return self._detect_text_google_vision(image)
+        except Exception as e:
+            logger.error(f"Error in detect_text: {str(e)}", exc_info=True)
+            return ""
     
     def _detect_text_google_vision(self, image: np.ndarray) -> str:
         """Detect text using Google Cloud Vision API."""
@@ -152,12 +273,8 @@ class TextProcessor:
                 pytesseract.pytesseract.tesseract_cmd = tesseract_path
                 logger.debug(f"Using Tesseract at: {tesseract_path}")
             
-            # Convert image to RGB if needed (Tesseract expects RGB)
-            if len(image.shape) == 3 and image.shape[2] == 3:
-                # BGR to RGB conversion
-                image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            else:
-                image_rgb = image
+            # Prepare image for OCR (ensure RGB format)
+            image_rgb = self._prepare_image_for_ocr(image)
             
             # Use pytesseract to extract text
             text = pytesseract.image_to_string(image_rgb, lang='eng+jpn+kor+chi_sim')
@@ -248,12 +365,8 @@ class TextProcessor:
                         logger.error(f"Error initializing PaddleOCR with PP-OCRv4: {e}", exc_info=True)
                         raise
             
-            # Convert numpy array to RGB if needed (PaddleOCR expects RGB)
-            if len(image.shape) == 3 and image.shape[2] == 3:
-                # BGR to RGB conversion
-                image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            else:
-                image_rgb = image
+            # Prepare image for OCR (ensure RGB format)
+            image_rgb = self._prepare_image_for_ocr(image)
             
             # Use PaddleOCR to extract text
             result = self._paddleocr_instance.ocr(image_rgb, cls=True)
@@ -289,7 +402,143 @@ class TextProcessor:
                 if not hasattr(self, '_paddleocr_error_shown'):
                     self._paddleocr_error_shown = True
             return ""
-
+    
+    def _detect_text_window_ocr(self, image: np.ndarray) -> str:
+        """Detect text using Windows OCR."""
+        if os.name != 'nt':
+            logger.error("Windows OCR not available. This feature is only available on Windows.")
+            return ""
+        
+        try:
+            # Lazy import owocr to avoid hanging during module load
+            global OWOCR, WINDOW_OCR_OWOCR, WINDOW_OCR_AVAILABLE
+            
+            # Try to import owocr if not already imported
+            if OWOCR is None:
+                try:
+                    OWOCR, import_success = safe_import_owocr()
+                    if import_success and OWOCR is not None:
+                        WINDOW_OCR_AVAILABLE = True
+                        WINDOW_OCR_OWOCR = True
+                    else:
+                        # Try winrt as fallback
+                        try:
+                            import winrt.windows.media.ocr as ocr
+                            import winrt.windows.storage.streams as streams
+                            import winrt.windows.graphics.imaging as imaging
+                            WINDOW_OCR_AVAILABLE = True
+                            WINDOW_OCR_OWOCR = False
+                        except Exception:
+                            WINDOW_OCR_AVAILABLE = False
+                            logger.error("Windows OCR not available. Install owocr or winrt to use Windows OCR mode.")
+                            return ""
+                except Exception as e:
+                    logger.error(f"Error importing Windows OCR: {str(e)}")
+                    WINDOW_OCR_AVAILABLE = False
+                    return ""
+            
+            if not WINDOW_OCR_AVAILABLE:
+                logger.error("Windows OCR not available.")
+                return ""
+            
+            # Use owocr wrapper (preferred method)
+            if WINDOW_OCR_OWOCR and OWOCR is not None:
+                if not hasattr(self, '_window_ocr_instance'):
+                    logger.info("Initializing Windows OCR via owocr...")
+                    self._window_ocr_instance = OWOCR(engine='winocr')
+                    logger.info("Windows OCR initialized successfully")
+                
+                # Convert numpy array to PIL Image
+                from PIL import Image
+                image_rgb = self._prepare_image_for_ocr(image)
+                pil_image = Image.fromarray(image_rgb)
+                
+                # Save to temporary file
+                import tempfile
+                import os
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                    pil_image.save(tmp_file.name)
+                    tmp_path = tmp_file.name
+                
+                try:
+                    result = self._window_ocr_instance.recognize(tmp_path)
+                    detected_text = result if isinstance(result, str) else '\n'.join(result).strip()
+                    logger.debug(f"Windows OCR detected text: '{detected_text[:100]}...' (length: {len(detected_text)})")
+                    return detected_text
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+            else:
+                # Fallback: Use winrt directly (Windows Runtime API) - more complex
+                logger.warning("Windows OCR: Direct winrt API not fully implemented. Please install owocr for better support.")
+                return ""
+                
+        except Exception as e:
+            logger.error(f"Error detecting text with Windows OCR: {str(e)}", exc_info=True)
+            error_str = str(e).lower()
+            if 'not found' in error_str or 'install' in error_str:
+                error_msg = (
+                    "Windows OCR is not available or not configured correctly.\n\n"
+                    "Please install it using:\npip install owocr[winocr]\n\n"
+                    "Or for direct Windows Runtime API:\npip install winrt\n\n"
+                    "Note: Windows OCR is only available on Windows."
+                )
+                logger.error(error_msg)
+                if not hasattr(self, '_window_ocr_error_shown'):
+                    self._window_ocr_error_shown = True
+            return ""
+    
+    def _detect_text_easyocr(self, image: np.ndarray) -> str:
+        """Detect text using EasyOCR."""
+        if not EASYOCR_AVAILABLE:
+            logger.error("EasyOCR not available. Please install easyocr.")
+            return ""
+        
+        try:
+            # Initialize EasyOCR if not already initialized
+            if not hasattr(self, '_easyocr_instance'):
+                logger.info("Initializing EasyOCR...")
+                # Initialize with common languages (can be customized)
+                self._easyocr_instance = easyocr.Reader(['en', 'ja', 'ko', 'zh', 'vi'], gpu=False)
+                logger.info("EasyOCR initialized successfully")
+            
+            # Prepare image for OCR (ensure RGB format)
+            image_rgb = self._prepare_image_for_ocr(image)
+            
+            # Use EasyOCR to extract text
+            result = self._easyocr_instance.readtext(image_rgb)
+            
+            if not result:
+                logger.debug("EasyOCR detected no text")
+                return ""
+            
+            # Extract text from EasyOCR result
+            # Result format: [[bbox, text, confidence], ...]
+            text_lines = []
+            for line in result:
+                if line and len(line) >= 2:
+                    text = line[1] if isinstance(line[1], str) else str(line[1])
+                    if text:
+                        text_lines.append(text)
+            
+            detected_text = '\n'.join(text_lines).strip()
+            logger.debug(f"EasyOCR detected text: '{detected_text[:100]}...' (length: {len(detected_text)})")
+            return detected_text
+            
+        except Exception as e:
+            logger.error(f"Error detecting text with EasyOCR: {str(e)}", exc_info=True)
+            error_str = str(e).lower()
+            if 'not found' in error_str or 'install' in error_str:
+                error_msg = (
+                    "EasyOCR is not installed or not configured correctly.\n\n"
+                    "Please install it using:\npip install easyocr\n\n"
+                    "For more information, visit: https://github.com/JaidedAI/EasyOCR"
+                )
+                logger.error(error_msg)
+                if not hasattr(self, '_easyocr_error_shown'):
+                    self._easyocr_error_shown = True
+            return ""
+    
     def translate_text(self, text: str, target_language: str, source_language: Optional[str] = None) -> str:
         """Translate text to the target language."""
         if not text:
@@ -302,14 +551,19 @@ class TextProcessor:
             return self.translation_cache[cache_key]
 
         try:
-            if translation_mode == 'local':
-                # Use LLM Studio for local translation
-                translated_text = self._translate_text_llm_studio(text, target_language, source_language)
-                service_name = 'LLM Studio'
-            elif translation_mode == 'libretranslate':
-                # Use LibreTranslate for translation
-                translated_text = self._translate_text_libretranslate(text, target_language, source_language)
-                service_name = 'LibreTranslate'
+            # Translation service mapping
+            translation_handlers = {
+                'local': (self._translate_with_service, 'llm_studio_translator', 'LLM Studio'),
+                'libretranslate': (self._translate_with_service, 'libretranslate_translator', 'LibreTranslate'),
+                'ollama': (self._translate_with_service, 'ollama_translator', 'Ollama'),
+                'chatgpt': (self._translate_with_service, 'chatgpt_translator', 'ChatGPT'),
+                'gemini': (self._translate_with_service, 'gemini_translator', 'Gemini'),
+                'mistral': (self._translate_with_service, 'mistral_translator', 'Mistral'),
+            }
+            
+            if translation_mode in translation_handlers:
+                handler, translator_attr, service_name = translation_handlers[translation_mode]
+                translated_text = handler(text, target_language, source_language, translator_attr, service_name)
             else:
                 # Use Google Cloud Translate
                 if not self.check_api_quota():
@@ -343,43 +597,55 @@ class TextProcessor:
             logger.error(f"Translation error: {str(e)}", exc_info=True)
             return text
     
-    def _translate_text_llm_studio(self, text: str, target_language: str, source_language: Optional[str] = None) -> str:
-        """Translate text using LLM Studio."""
-        if not self.llm_studio_translator:
-            logger.error("LLM Studio translator not initialized")
+    def _translate_with_service(self, text: str, target_language: str, source_language: Optional[str], 
+                                translator_attr: str, service_name: str) -> str:
+        """Generic method to translate text using a service translator."""
+        translator = getattr(self, translator_attr, None)
+        if not translator:
+            logger.error(f"{service_name} translator not initialized")
             return text
         
         try:
-            logger.debug(f"LLM Studio translation: '{text[:50]}...' ({source_language} -> {target_language})")
-            translated_text = self.llm_studio_translator.translate(
+            # Special handling for Ollama to log model info
+            log_level = logger.info if service_name == 'Ollama' else logger.debug
+            model_info = ""
+            if service_name == 'Ollama' and hasattr(translator, 'model_name') and translator.model_name:
+                model_info = f" [Model: {translator.model_name}]"
+            elif service_name == 'Ollama' and hasattr(translator, '_get_model_name'):
+                try:
+                    model = translator._get_model_name()
+                    model_info = f" [Model: {model}]"
+                except Exception:
+                    pass
+            
+            log_level(f"{service_name} translation{model_info}: '{text[:50]}...' ({source_language} -> {target_language})")
+            translated_text = translator.translate(
                 text,
                 source_language or 'auto',
                 target_language
             )
-            logger.debug(f"LLM Studio translation result: '{translated_text[:50]}...'")
+            logger.debug(f"{service_name} translation result: '{translated_text[:50]}...'")
             return translated_text
         except Exception as e:
-            logger.error(f"LLM Studio translation error: {str(e)}", exc_info=True)
+            logger.error(f"{service_name} translation error: {str(e)}", exc_info=True)
             return text
     
-    def _translate_text_libretranslate(self, text: str, target_language: str, source_language: Optional[str] = None) -> str:
-        """Translate text using LibreTranslate."""
-        if not self.libretranslate_translator:
-            logger.error("LibreTranslate translator not initialized")
-            return text
-        
-        try:
-            logger.debug(f"LibreTranslate translation: '{text[:50]}...' ({source_language} -> {target_language})")
-            translated_text = self.libretranslate_translator.translate(
-                text,
-                source_language or 'auto',
-                target_language
-            )
-            logger.debug(f"LibreTranslate translation result: '{translated_text[:50]}...'")
-            return translated_text
-        except Exception as e:
-            logger.error(f"LibreTranslate translation error: {str(e)}", exc_info=True)
-            return text
+    def set_chatgpt_translator(self, translator: 'ChatGPTTranslator'):
+        """Set ChatGPT translator."""
+        self._set_translator('chatgpt_translator', translator, 'ChatGPT')
+    
+    def set_gemini_translator(self, translator: 'GeminiTranslator'):
+        """Set Gemini translator."""
+        self._set_translator('gemini_translator', translator, 'Gemini')
+    
+    def set_mistral_translator(self, translator: 'MistralTranslator'):
+        """Set Mistral translator."""
+        self._set_translator('mistral_translator', translator, 'Mistral')
+    
+    def _set_translator(self, attr_name: str, translator, service_name: str):
+        """Generic method to set a translator."""
+        setattr(self, attr_name, translator)
+        logger.info(f"{service_name} translator set")
 
     def _save_translation_history(self):
         """Save translation history to file."""
@@ -412,10 +678,17 @@ class TextProcessor:
     
     def set_llm_studio_translator(self, llm_studio_translator: Optional['LLMStudioTranslator']) -> None:
         """Update the LLM Studio translator instance."""
-        logger.info("Updating LLM Studio translator in TextProcessor")
-        self.llm_studio_translator = llm_studio_translator
+        self._update_translator('llm_studio_translator', llm_studio_translator, 'LLM Studio')
     
     def set_libretranslate_translator(self, libretranslate_translator: Optional['LibreTranslateTranslator']) -> None:
         """Update the LibreTranslate translator instance."""
-        logger.info("Updating LibreTranslate translator in TextProcessor")
-        self.libretranslate_translator = libretranslate_translator
+        self._update_translator('libretranslate_translator', libretranslate_translator, 'LibreTranslate')
+    
+    def set_ollama_translator(self, ollama_translator: Optional['OllamaTranslator']) -> None:
+        """Update the Ollama translator instance."""
+        self._update_translator('ollama_translator', ollama_translator, 'Ollama')
+    
+    def _update_translator(self, attr_name: str, translator, service_name: str):
+        """Generic method to update a translator instance."""
+        logger.info(f"Updating {service_name} translator in TextProcessor")
+        setattr(self, attr_name, translator)

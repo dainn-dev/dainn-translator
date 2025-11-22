@@ -56,6 +56,17 @@ class ConfigManager:
             'llm_studio_model': '',
             'tesseract_path': '',
             'libretranslate_url': 'http://localhost:5000',
+            'ollama_url': 'http://localhost:11434',
+            'ollama_model': '',
+            'chatgpt_url': 'https://api.openai.com/v1',
+            'chatgpt_api_key': '',
+            'chatgpt_model': 'gpt-3.5-turbo',
+            'gemini_url': 'https://generativelanguage.googleapis.com/v1',
+            'gemini_api_key': '',
+            'gemini_model': 'gemini-pro',
+            'mistral_url': 'https://api.mistral.ai/v1',
+            'mistral_api_key': '',
+            'mistral_model': 'mistral-tiny',
             'ocr_mode': 'tesseract'
         }
 
@@ -289,13 +300,13 @@ class ConfigManager:
         self.set_global_setting('auto_pause_threshold', str(threshold))
     
     def get_translation_mode(self) -> str:
-        """Get translation mode ('google', 'local', or 'libretranslate')"""
+        """Get translation mode ('google', 'local', 'libretranslate', 'ollama', 'chatgpt', 'gemini', or 'mistral')"""
         return self.get_global_setting('translation_mode', 'google')
     
     def set_translation_mode(self, mode: str) -> None:
-        """Set translation mode ('google', 'local', or 'libretranslate')"""
-        if mode not in ('google', 'local', 'libretranslate'):
-            raise ValueError("Translation mode must be 'google', 'local', or 'libretranslate'")
+        """Set translation mode ('google', 'local', 'libretranslate', 'ollama', 'chatgpt', 'gemini', or 'mistral')"""
+        if mode not in ('google', 'local', 'libretranslate', 'ollama', 'chatgpt', 'gemini', 'mistral'):
+            raise ValueError("Translation mode must be 'google', 'local', 'libretranslate', 'ollama', 'chatgpt', 'gemini', or 'mistral'")
         self.set_global_setting('translation_mode', mode)
     
     def get_llm_studio_url(self) -> str:
@@ -330,12 +341,107 @@ class ConfigManager:
         """Set LibreTranslate API URL"""
         self.set_global_setting('libretranslate_url', url)
     
+    def get_ollama_url(self) -> str:
+        """Get Ollama API URL"""
+        return self.get_global_setting('ollama_url', 'http://localhost:11434')
+    
+    def set_ollama_url(self, url: str) -> None:
+        """Set Ollama API URL"""
+        self.set_global_setting('ollama_url', url)
+    
+    def get_ollama_model(self) -> str:
+        """Get Ollama model name (empty string means auto-detect)"""
+        return self.get_global_setting('ollama_model', '')
+    
+    def set_ollama_model(self, model: str) -> None:
+        """Set Ollama model name (empty string means auto-detect)"""
+        self.set_global_setting('ollama_model', model)
+    
+    def get_chatgpt_url(self) -> str:
+        """Get ChatGPT API URL"""
+        return self.get_global_setting('chatgpt_url', 'https://api.openai.com/v1')
+    
+    def set_chatgpt_url(self, url: str) -> None:
+        """Set ChatGPT API URL"""
+        self.set_global_setting('chatgpt_url', url)
+    
+    def get_chatgpt_api_key(self) -> str:
+        """Get ChatGPT API key"""
+        return self.get_global_setting('chatgpt_api_key', '')
+    
+    def set_chatgpt_api_key(self, api_key: str) -> None:
+        """Set ChatGPT API key"""
+        self.set_global_setting('chatgpt_api_key', api_key)
+    
+    def get_chatgpt_model(self) -> str:
+        """Get ChatGPT model name"""
+        return self.get_global_setting('chatgpt_model', 'gpt-3.5-turbo')
+    
+    def set_chatgpt_model(self, model: str) -> None:
+        """Set ChatGPT model name"""
+        self.set_global_setting('chatgpt_model', model)
+    
+    def get_gemini_url(self) -> str:
+        """Get Gemini API URL"""
+        return self.get_global_setting('gemini_url', 'https://generativelanguage.googleapis.com/v1')
+    
+    def set_gemini_url(self, url: str) -> None:
+        """Set Gemini API URL"""
+        self.set_global_setting('gemini_url', url)
+    
+    def get_gemini_api_key(self) -> str:
+        """Get Gemini API key"""
+        return self.get_global_setting('gemini_api_key', '')
+    
+    def set_gemini_api_key(self, api_key: str) -> None:
+        """Set Gemini API key"""
+        self.set_global_setting('gemini_api_key', api_key)
+    
+    def get_gemini_model(self) -> str:
+        """Get Gemini model name"""
+        return self.get_global_setting('gemini_model', 'gemini-pro')
+    
+    def set_gemini_model(self, model: str) -> None:
+        """Set Gemini model name"""
+        self.set_global_setting('gemini_model', model)
+    
+    def get_mistral_url(self) -> str:
+        """Get Mistral API URL"""
+        return self.get_global_setting('mistral_url', 'https://api.mistral.ai/v1')
+    
+    def set_mistral_url(self, url: str) -> None:
+        """Set Mistral API URL"""
+        self.set_global_setting('mistral_url', url)
+    
+    def get_mistral_api_key(self) -> str:
+        """Get Mistral API key"""
+        return self.get_global_setting('mistral_api_key', '')
+    
+    def set_mistral_api_key(self, api_key: str) -> None:
+        """Set Mistral API key"""
+        self.set_global_setting('mistral_api_key', api_key)
+    
+    def get_mistral_model(self) -> str:
+        """Get Mistral model name"""
+        return self.get_global_setting('mistral_model', 'mistral-tiny')
+    
+    def set_mistral_model(self, model: str) -> None:
+        """Set Mistral model name"""
+        self.set_global_setting('mistral_model', model)
+    
     def get_ocr_mode(self) -> str:
-        """Get OCR mode ('tesseract' or 'paddleocr')"""
-        return self.get_global_setting('ocr_mode', 'tesseract')
+        """Get OCR mode ('tesseract', 'paddleocr', 'window_ocr', or 'easyocr')"""
+        mode = self.get_global_setting('ocr_mode', 'tesseract')
+        # Handle legacy OCR modes - convert to tesseract
+        if mode == 'rapidocr':
+            logger.warning("Legacy OCR mode detected. Defaulting to Tesseract.")
+            self.set_ocr_mode('tesseract')
+            return 'tesseract'
+        return mode
     
     def set_ocr_mode(self, mode: str) -> None:
-        """Set OCR mode ('tesseract' or 'paddleocr')"""
-        if mode not in ('tesseract', 'paddleocr'):
-            raise ValueError("OCR mode must be 'tesseract' or 'paddleocr'")
+        """Set OCR mode ('tesseract', 'paddleocr', 'window_ocr', or 'easyocr')"""
+        valid_modes = ('tesseract', 'paddleocr', 'window_ocr', 'easyocr')
+        if mode not in valid_modes:
+            raise ValueError(f"OCR mode must be one of: {', '.join(valid_modes)}")
         self.set_global_setting('ocr_mode', mode) 

@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import time
+import subprocess
 from typing import Optional
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QGroupBox, QLabel,
@@ -14,7 +15,7 @@ from src.config_manager import ConfigManager
 from src.screen_capture import capture_screen_region
 from src.ui.translation_window import TranslationWindow
 from src.ui.utils import validate_credentials, show_error_message
-from src.text_processing import TextProcessor
+from src.text_processing import TextProcessor, check_ocr_availability, get_ocr_install_command
 from src.version_checker import VersionChecker
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,188 @@ class LLMInitializationThread(QThread):
             self.error.emit(error_msg)
 
 
+class OllamaInitializationThread(QThread):
+    """Thread for initializing Ollama translator in the background."""
+    initialized = pyqtSignal(object)  # Emits OllamaTranslator instance
+    error = pyqtSignal(str)  # Emits error message
+    
+    def __init__(self, api_url: str, model_name: str = None):
+        super().__init__()
+        self.api_url = api_url
+        self.model_name = model_name
+    
+    def run(self):
+        """Initialize Ollama translator in background thread."""
+        try:
+            logger.info("Background thread: Initializing Ollama translator...")
+            from src.translator.ollama_translator import OllamaTranslator
+            
+            # Use model name if configured (and not empty), otherwise None for auto-detect
+            model_name = self.model_name if self.model_name and self.model_name.strip() else None
+            logger.info(f"Initializing Ollama with model: {model_name or 'auto-detect'}")
+            ollama_translator = OllamaTranslator(self.api_url, model_name=model_name)
+            
+            # Test connection
+            if ollama_translator.test_connection():
+                logger.info("Background thread: Ollama connection successful")
+                self.initialized.emit(ollama_translator)
+            else:
+                logger.warning("Background thread: Ollama connection test failed. The API may not be running.")
+                self.error.emit("Ollama connection test failed. The API may not be running.")
+        except Exception as e:
+            error_msg = f"Error initializing Ollama translator: {str(e)}"
+            logger.error(f"Background thread: {error_msg}", exc_info=True)
+            self.error.emit(error_msg)
+
+
+class ChatGPTInitializationThread(QThread):
+    """Thread for initializing ChatGPT translator in the background."""
+    initialized = pyqtSignal(object)  # Emits ChatGPTTranslator instance
+    error = pyqtSignal(str)  # Emits error message
+    
+    def __init__(self, api_url: str, api_key: str, model_name: str = None):
+        super().__init__()
+        self.api_url = api_url
+        self.api_key = api_key
+        self.model_name = model_name
+    
+    def run(self):
+        """Initialize ChatGPT translator in background thread."""
+        try:
+            logger.info("Background thread: Initializing ChatGPT translator...")
+            from src.translator.chatgpt_translator import ChatGPTTranslator
+            
+            model_name = self.model_name if self.model_name else "gpt-3.5-turbo"
+            logger.info(f"Initializing ChatGPT with model: {model_name}")
+            chatgpt_translator = ChatGPTTranslator(self.api_url, self.api_key, model_name)
+            
+            # Test connection
+            if chatgpt_translator.test_connection():
+                logger.info("Background thread: ChatGPT connection successful")
+                self.initialized.emit(chatgpt_translator)
+            else:
+                logger.warning("Background thread: ChatGPT connection test failed. Check API key and URL.")
+                self.error.emit("ChatGPT connection test failed. Check API key and URL.")
+        except Exception as e:
+            error_msg = f"Error initializing ChatGPT translator: {str(e)}"
+            logger.error(f"Background thread: {error_msg}", exc_info=True)
+            self.error.emit(error_msg)
+
+
+class GeminiInitializationThread(QThread):
+    """Thread for initializing Gemini translator in the background."""
+    initialized = pyqtSignal(object)  # Emits GeminiTranslator instance
+    error = pyqtSignal(str)  # Emits error message
+    
+    def __init__(self, api_url: str, api_key: str, model_name: str = None):
+        super().__init__()
+        self.api_url = api_url
+        self.api_key = api_key
+        self.model_name = model_name
+    
+    def run(self):
+        """Initialize Gemini translator in background thread."""
+        try:
+            logger.info("Background thread: Initializing Gemini translator...")
+            from src.translator.gemini_translator import GeminiTranslator
+            
+            model_name = self.model_name if self.model_name else "gemini-pro"
+            logger.info(f"Initializing Gemini with model: {model_name}")
+            gemini_translator = GeminiTranslator(self.api_url, self.api_key, model_name)
+            
+            # Test connection
+            if gemini_translator.test_connection():
+                logger.info("Background thread: Gemini connection successful")
+                self.initialized.emit(gemini_translator)
+            else:
+                logger.warning("Background thread: Gemini connection test failed. Check API key and URL.")
+                self.error.emit("Gemini connection test failed. Check API key and URL.")
+        except Exception as e:
+            error_msg = f"Error initializing Gemini translator: {str(e)}"
+            logger.error(f"Background thread: {error_msg}", exc_info=True)
+            self.error.emit(error_msg)
+
+
+class MistralInitializationThread(QThread):
+    """Thread for initializing Mistral translator in the background."""
+    initialized = pyqtSignal(object)  # Emits MistralTranslator instance
+    error = pyqtSignal(str)  # Emits error message
+    
+    def __init__(self, api_url: str, api_key: str, model_name: str = None):
+        super().__init__()
+        self.api_url = api_url
+        self.api_key = api_key
+        self.model_name = model_name
+    
+    def run(self):
+        """Initialize Mistral translator in background thread."""
+        try:
+            logger.info("Background thread: Initializing Mistral translator...")
+            from src.translator.mistral_translator import MistralTranslator
+            
+            model_name = self.model_name if self.model_name else "mistral-tiny"
+            logger.info(f"Initializing Mistral with model: {model_name}")
+            mistral_translator = MistralTranslator(self.api_url, self.api_key, model_name)
+            
+            # Test connection
+            if mistral_translator.test_connection():
+                logger.info("Background thread: Mistral connection successful")
+                self.initialized.emit(mistral_translator)
+            else:
+                logger.warning("Background thread: Mistral connection test failed. Check API key and URL.")
+                self.error.emit("Mistral connection test failed. Check API key and URL.")
+        except Exception as e:
+            error_msg = f"Error initializing Mistral translator: {str(e)}"
+            logger.error(f"Background thread: {error_msg}", exc_info=True)
+            self.error.emit(error_msg)
+
+
+class OCRInstallationThread(QThread):
+    """Thread for installing OCR engines in the background."""
+    finished = pyqtSignal(bool, str)  # Emits (success, message)
+    progress = pyqtSignal(str)  # Emits progress message
+    
+    def __init__(self, ocr_mode: str):
+        super().__init__()
+        self.ocr_mode = ocr_mode
+    
+    def run(self):
+        """Install OCR engine in background thread."""
+        try:
+            install_cmd = get_ocr_install_command(self.ocr_mode)
+            if not install_cmd:
+                self.finished.emit(False, f"Unknown OCR engine: {self.ocr_mode}")
+                return
+            
+            self.progress.emit(f"Installing {self.ocr_mode}...")
+            logger.info(f"Installing OCR engine: {install_cmd}")
+            
+            # Run pip install command
+            result = subprocess.run(
+                install_cmd.split(),
+                capture_output=True,
+                text=True,
+                timeout=600  # 10 minute timeout
+            )
+            
+            if result.returncode == 0:
+                self.progress.emit(f"{self.ocr_mode} installed successfully!")
+                self.finished.emit(True, f"{self.ocr_mode} installed successfully!")
+            else:
+                error_msg = result.stderr or result.stdout or "Unknown error"
+                logger.error(f"Installation failed: {error_msg}")
+                self.finished.emit(False, f"Installation failed: {error_msg}")
+                
+        except subprocess.TimeoutExpired:
+            error_msg = "Installation timed out after 10 minutes"
+            logger.error(error_msg)
+            self.finished.emit(False, error_msg)
+        except Exception as e:
+            error_msg = f"Error installing {self.ocr_mode}: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            self.finished.emit(False, error_msg)
+
+
 class HotkeyInput(QLineEdit):
     """Custom QLineEdit for capturing keyboard shortcuts."""
     
@@ -121,11 +304,13 @@ class HotkeyInput(QLineEdit):
         self.installEventFilter(self)
         self.setStyleSheet("""
             QLineEdit {
-                padding: 6px;
+                padding: 1px 4px;
                 border: 2px solid #2196F3;
                 border-radius: 4px;
                 background-color: white;
                 font-size: 10pt;
+                min-height: 12px;
+                max-height: 18px;
             }
             QLineEdit:focus {
                 border: 2px solid #1976D2;
@@ -238,6 +423,10 @@ class MainWindow(QMainWindow):
         
         # LLM initialization thread
         self.llm_init_thread = None
+        self.ollama_init_thread = None
+        self.chatgpt_init_thread = None
+        self.gemini_init_thread = None
+        self.mistral_init_thread = None
 
         # Version checker
         self.version_checker = VersionChecker()
@@ -307,6 +496,40 @@ class MainWindow(QMainWindow):
         """Handle LLM initialization thread completion."""
         logger.info("LLM initialization thread finished")
         self.llm_init_thread = None
+    
+    def init_ollama_in_background(self):
+        """Initialize Ollama translator in a background thread."""
+        try:
+            logger.info("Starting Ollama initialization in background thread...")
+            ollama_url = self.config_manager.get_ollama_url()
+            ollama_model = self.config_manager.get_ollama_model()
+            
+            # Create and start the initialization thread
+            self.ollama_init_thread = OllamaInitializationThread(ollama_url, ollama_model)
+            self.ollama_init_thread.initialized.connect(self.on_ollama_initialized)
+            self.ollama_init_thread.error.connect(self.on_ollama_initialization_error)
+            self.ollama_init_thread.finished.connect(self.on_ollama_thread_finished)
+            self.ollama_init_thread.start()
+        except Exception as e:
+            logger.error(f"Error starting Ollama initialization thread: {str(e)}", exc_info=True)
+    
+    def on_ollama_initialized(self, ollama_translator):
+        """Handle successful Ollama initialization."""
+        try:
+            logger.info("Ollama translator initialized successfully, updating TextProcessor")
+            self.text_processor.set_ollama_translator(ollama_translator)
+            logger.info("TextProcessor updated with Ollama translator")
+        except Exception as e:
+            logger.error(f"Error updating TextProcessor with Ollama translator: {str(e)}", exc_info=True)
+    
+    def on_ollama_initialization_error(self, error_msg: str):
+        """Handle Ollama initialization error."""
+        logger.warning(f"Ollama initialization error: {error_msg}")
+    
+    def on_ollama_thread_finished(self):
+        """Handle Ollama initialization thread completion."""
+        logger.info("Ollama initialization thread finished")
+        self.ollama_init_thread = None
 
     def init_ui(self):
         """Initialize the user interface."""
@@ -319,11 +542,12 @@ class MainWindow(QMainWindow):
         # Apply global styling for comboboxes and text boxes
         widget_style = """
             QComboBox {
-                padding: 4px 6px;
+                padding: 1px 4px;
                 border: 1px solid #ccc;
                 border-radius: 4px;
                 background-color: white;
-                min-height: 20px;
+                min-height: 12px;
+                max-height: 18px;
             }
             QComboBox:hover {
                 border: 1px solid #2196F3;
@@ -337,20 +561,22 @@ class MainWindow(QMainWindow):
             }
             QComboBox::down-arrow {
                 width: 12px;
+                color: #1976d2;
                 height: 12px;
             }
             QComboBox QAbstractItemView {
                 padding: 4px;
                 border: 1px solid #ccc;
                 border-radius: 4px;
-                selection-background-color: #e3f2fd;
+                selection-background-color: #1976d2;
             }
             QLineEdit {
-                padding: 4px 6px;
+                padding: 1px 4px;
                 border: 1px solid #ccc;
                 border-radius: 4px;
                 background-color: white;
-                min-height: 20px;
+                min-height: 12px;
+                max-height: 18px;
             }
             QLineEdit:hover {
                 border: 1px solid #2196F3;
@@ -605,7 +831,7 @@ class MainWindow(QMainWindow):
         # Translation mode settings
         self.translation_mode_group = QGroupBox("⚙️ Translation Service")
         self.translation_mode_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
-        self.translation_mode_group.setToolTip("Choose your translation service: Google Cloud (paid), Local (free, requires LM Studio), or LibreTranslate (free, self-hosted)")
+        self.translation_mode_group.setToolTip("Choose your translation service: Google Cloud (paid), Local (free, requires LM Studio), LibreTranslate (free, self-hosted), or Ollama (free, local LLM)")
         self.settings_layout.addWidget(self.translation_mode_group)
         self.translation_mode_layout = QVBoxLayout(self.translation_mode_group)
         self.translation_mode_layout.setSpacing(8)
@@ -616,16 +842,34 @@ class MainWindow(QMainWindow):
         self.mode_label.setToolTip("Select the translation service to use")
         self.mode_layout.addWidget(self.mode_label)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Google Cloud", "Local (Tesseract + LM Studio)", "LibreTranslate (Tesseract + LibreTranslate)"])
+        self.mode_combo.addItems([
+            "Google Cloud", 
+            "Local (Tesseract + LM Studio)", 
+            "LibreTranslate (Tesseract + LibreTranslate)", 
+            "Ollama (Tesseract + Ollama)",
+            "ChatGPT (Tesseract + ChatGPT)",
+            "Gemini (Tesseract + Gemini)",
+            "Mistral (Tesseract + Mistral)"
+        ])
         current_mode = self.config_manager.get_translation_mode()
         if current_mode == 'google':
             mode_index = 0
         elif current_mode == 'local':
             mode_index = 1
-        else:  # libretranslate
+        elif current_mode == 'libretranslate':
             mode_index = 2
+        elif current_mode == 'ollama':
+            mode_index = 3
+        elif current_mode == 'chatgpt':
+            mode_index = 4
+        elif current_mode == 'gemini':
+            mode_index = 5
+        elif current_mode == 'mistral':
+            mode_index = 6
+        else:
+            mode_index = 0
         self.mode_combo.setCurrentIndex(mode_index)
-        self.mode_combo.setToolTip("Google Cloud: Paid, high quality\nLocal: Free, requires LM Studio running\nLibreTranslate: Free, requires LibreTranslate server")
+        self.mode_combo.setToolTip("Google Cloud: Paid, high quality\nLocal: Free, requires LM Studio running\nLibreTranslate: Free, requires LibreTranslate server\nOllama: Free, requires Ollama running\nChatGPT: Paid, requires OpenAI API key\nGemini: Paid, requires Google API key\nMistral: Paid, requires Mistral API key")
         self.mode_combo.currentIndexChanged.connect(self.on_translation_mode_changed)
         self.mode_layout.addWidget(self.mode_combo)
         self.mode_layout.addStretch()  # Add stretch to align left
@@ -671,12 +915,19 @@ class MainWindow(QMainWindow):
         self.ocr_mode_label.setToolTip("OCR engine for detecting text from screen")
         self.ocr_mode_layout.addWidget(self.ocr_mode_label)
         self.ocr_mode_combo = QComboBox()
-        self.ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR"])
+        self.ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR", "Windows OCR", "EasyOCR"])
         current_ocr_mode = self.config_manager.get_ocr_mode()
-        self.ocr_mode_combo.setCurrentIndex(0 if current_ocr_mode == 'tesseract' else 1)
-        self.ocr_mode_combo.setToolTip("Tesseract: Free, widely available\nPaddleOCR: Better accuracy, requires installation")
+        ocr_mode_map = {'tesseract': 0, 'paddleocr': 1, 'window_ocr': 2, 'easyocr': 3}
+        self.ocr_mode_combo.setCurrentIndex(ocr_mode_map.get(current_ocr_mode, 0))
+        self.ocr_mode_combo.setToolTip("Tesseract: Free, widely available\nPaddleOCR: Better accuracy\nWindows OCR: Windows native OCR\nEasyOCR: 80+ languages")
         self.ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_mode_changed)
         self.ocr_mode_layout.addWidget(self.ocr_mode_combo)
+        # Install button for OCR
+        self.ocr_install_button = QPushButton("Download and Install")
+        self.ocr_install_button.setToolTip("Install the selected OCR engine if not available")
+        self.ocr_install_button.clicked.connect(lambda: self.install_ocr_engine('ocr_mode_combo'))
+        self.ocr_install_button.hide()  # Hide by default, show if needed
+        self.ocr_mode_layout.addWidget(self.ocr_install_button)
         self.llm_studio_layout.addLayout(self.ocr_mode_layout)
 
         # Tesseract path setting
@@ -735,12 +986,19 @@ class MainWindow(QMainWindow):
         self.libretranslate_ocr_mode_label.setToolTip("OCR engine for detecting text from screen")
         self.libretranslate_ocr_mode_layout.addWidget(self.libretranslate_ocr_mode_label)
         self.libretranslate_ocr_mode_combo = QComboBox()
-        self.libretranslate_ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR"])
+        self.libretranslate_ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR", "Windows OCR", "EasyOCR"])
         current_ocr_mode = self.config_manager.get_ocr_mode()
-        self.libretranslate_ocr_mode_combo.setCurrentIndex(0 if current_ocr_mode == 'tesseract' else 1)
-        self.libretranslate_ocr_mode_combo.setToolTip("Tesseract: Free, widely available\nPaddleOCR: Better accuracy, requires installation")
+        ocr_mode_map = {'tesseract': 0, 'paddleocr': 1, 'window_ocr': 2, 'easyocr': 3}
+        self.libretranslate_ocr_mode_combo.setCurrentIndex(ocr_mode_map.get(current_ocr_mode, 0))
+        self.libretranslate_ocr_mode_combo.setToolTip("Tesseract: Free, widely available\nPaddleOCR: Better accuracy\nWindows OCR: Windows native OCR\nEasyOCR: 80+ languages")
         self.libretranslate_ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_mode_changed)
         self.libretranslate_ocr_mode_layout.addWidget(self.libretranslate_ocr_mode_combo)
+        # Install button for LibreTranslate OCR
+        self.libretranslate_ocr_install_button = QPushButton("Download and Install")
+        self.libretranslate_ocr_install_button.setToolTip("Install the selected OCR engine if not available")
+        self.libretranslate_ocr_install_button.clicked.connect(lambda: self.install_ocr_engine('libretranslate_ocr_mode_combo'))
+        self.libretranslate_ocr_install_button.hide()
+        self.libretranslate_ocr_mode_layout.addWidget(self.libretranslate_ocr_install_button)
         self.libretranslate_layout.addLayout(self.libretranslate_ocr_mode_layout)
 
         # Tesseract path setting for LibreTranslate
@@ -764,6 +1022,384 @@ class MainWindow(QMainWindow):
         self.libretranslate_tesseract_test_button.clicked.connect(self.test_tesseract)
         self.libretranslate_tesseract_path_layout.addWidget(self.libretranslate_tesseract_test_button)
         self.libretranslate_layout.addLayout(self.libretranslate_tesseract_path_layout)
+
+        # Ollama settings (shown only when ollama mode is selected)
+        self.ollama_group = QGroupBox("🦙 Ollama Configuration")
+        self.ollama_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.ollama_group.setToolTip("Configure Ollama API connection (free, local LLM translation service)")
+        self.translation_mode_layout.addWidget(self.ollama_group)
+        self.ollama_layout = QVBoxLayout(self.ollama_group)
+        self.ollama_layout.setSpacing(8)
+
+        # API URL setting
+        self.ollama_url_layout = QHBoxLayout()
+        self.ollama_url_label = QLabel("API URL:")
+        self.ollama_url_label.setToolTip("Ollama server API endpoint")
+        self.ollama_url_layout.addWidget(self.ollama_url_label)
+        self.ollama_edit = QLineEdit()
+        self.ollama_edit.setText(self.config_manager.get_ollama_url())
+        self.ollama_edit.setPlaceholderText("http://localhost:11434")
+        self.ollama_edit.setToolTip("Enter Ollama API URL (default: http://localhost:11434)\nMake sure Ollama server is running")
+        self.ollama_edit.textChanged.connect(self.on_ollama_url_changed)
+        self.ollama_url_layout.addWidget(self.ollama_edit)
+        
+        # Test connection button (inline with API URL)
+        self.ollama_test_button = QPushButton("Test Connection")
+        self.ollama_test_button.setToolTip("Test if Ollama API is accessible and working")
+        self.ollama_test_button.clicked.connect(self.test_ollama)
+        self.ollama_url_layout.addWidget(self.ollama_test_button)
+        
+        self.ollama_layout.addLayout(self.ollama_url_layout)
+
+        # Model name setting
+        self.ollama_model_layout = QHBoxLayout()
+        self.ollama_model_label = QLabel("Model Name:")
+        self.ollama_model_label.setToolTip("Specific model to use (optional)")
+        self.ollama_model_layout.addWidget(self.ollama_model_label)
+        self.ollama_model_edit = QLineEdit()
+        self.ollama_model_edit.setPlaceholderText("Leave empty for auto-detect")
+        self.ollama_model_edit.setText(self.config_manager.get_ollama_model())
+        self.ollama_model_edit.setToolTip("Enter a specific model name, or leave empty to auto-detect from Ollama")
+        self.ollama_model_edit.textChanged.connect(self.on_ollama_model_changed)
+        self.ollama_model_layout.addWidget(self.ollama_model_edit)
+        self.ollama_layout.addLayout(self.ollama_model_layout)
+
+        # OCR mode setting for Ollama
+        self.ollama_ocr_mode_layout = QHBoxLayout()
+        self.ollama_ocr_mode_label = QLabel("Text Detection (OCR):")
+        self.ollama_ocr_mode_label.setToolTip("OCR engine for detecting text from screen")
+        self.ollama_ocr_mode_layout.addWidget(self.ollama_ocr_mode_label)
+        self.ollama_ocr_mode_combo = QComboBox()
+        self.ollama_ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR", "Windows OCR", "EasyOCR"])
+        current_ocr_mode = self.config_manager.get_ocr_mode()
+        ocr_mode_map = {'tesseract': 0, 'paddleocr': 1, 'window_ocr': 2, 'easyocr': 3}
+        self.ollama_ocr_mode_combo.setCurrentIndex(ocr_mode_map.get(current_ocr_mode, 0))
+        self.ollama_ocr_mode_combo.setToolTip("Tesseract: Free, widely available\nPaddleOCR: Better accuracy\nWindows OCR: Windows native OCR\nEasyOCR: 80+ languages")
+        self.ollama_ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_mode_changed)
+        self.ollama_ocr_mode_layout.addWidget(self.ollama_ocr_mode_combo)
+        # Install button for Ollama OCR
+        self.ollama_ocr_install_button = QPushButton("Download and Install")
+        self.ollama_ocr_install_button.setToolTip("Install the selected OCR engine if not available")
+        self.ollama_ocr_install_button.clicked.connect(lambda: self.install_ocr_engine('ollama_ocr_mode_combo'))
+        self.ollama_ocr_install_button.hide()
+        self.ollama_ocr_mode_layout.addWidget(self.ollama_ocr_install_button)
+        self.ollama_layout.addLayout(self.ollama_ocr_mode_layout)
+
+        # Tesseract path setting for Ollama
+        self.ollama_tesseract_path_layout = QHBoxLayout()
+        self.ollama_tesseract_path_label = QLabel("Tesseract Path:")
+        self.ollama_tesseract_path_label.setToolTip("Path to tesseract.exe (leave empty if Tesseract is in system PATH)")
+        self.ollama_tesseract_path_layout.addWidget(self.ollama_tesseract_path_label)
+        self.ollama_tesseract_path_edit = QLineEdit()
+        self.ollama_tesseract_path_edit.setPlaceholderText("Leave empty to use system PATH")
+        self.ollama_tesseract_path_edit.setText(self.config_manager.get_tesseract_path())
+        self.ollama_tesseract_path_edit.setToolTip("Enter full path to tesseract.exe, or leave empty if Tesseract is installed and in your system PATH")
+        self.ollama_tesseract_path_edit.textChanged.connect(self.on_tesseract_path_changed)
+        self.ollama_tesseract_path_layout.addWidget(self.ollama_tesseract_path_edit)
+        self.ollama_tesseract_browse_button = QPushButton("Browse...")
+        self.ollama_tesseract_browse_button.setToolTip("Browse for tesseract.exe file")
+        self.ollama_tesseract_browse_button.clicked.connect(self.browse_tesseract_path)
+        self.ollama_tesseract_path_layout.addWidget(self.ollama_tesseract_browse_button)
+        
+        self.ollama_tesseract_test_button = QPushButton("Test")
+        self.ollama_tesseract_test_button.setToolTip("Test if Tesseract is installed and working correctly")
+        self.ollama_tesseract_test_button.clicked.connect(self.test_tesseract)
+        self.ollama_tesseract_path_layout.addWidget(self.ollama_tesseract_test_button)
+        self.ollama_layout.addLayout(self.ollama_tesseract_path_layout)
+
+        # ChatGPT settings (shown only when chatgpt mode is selected)
+        self.chatgpt_group = QGroupBox("💬 ChatGPT Configuration")
+        self.chatgpt_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.chatgpt_group.setToolTip("Configure ChatGPT API connection (paid, requires OpenAI API key)")
+        self.translation_mode_layout.addWidget(self.chatgpt_group)
+        self.chatgpt_layout = QVBoxLayout(self.chatgpt_group)
+        self.chatgpt_layout.setSpacing(8)
+
+        # API URL setting
+        self.chatgpt_url_layout = QHBoxLayout()
+        self.chatgpt_url_label = QLabel("API URL:")
+        self.chatgpt_url_label.setToolTip("ChatGPT/OpenAI API endpoint URL")
+        self.chatgpt_url_layout.addWidget(self.chatgpt_url_label)
+        self.chatgpt_edit = QLineEdit()
+        self.chatgpt_edit.setText(self.config_manager.get_chatgpt_url())
+        self.chatgpt_edit.setPlaceholderText("https://api.openai.com/v1")
+        self.chatgpt_edit.setToolTip("Enter ChatGPT/OpenAI API URL (default: https://api.openai.com/v1)")
+        self.chatgpt_edit.textChanged.connect(self.on_chatgpt_url_changed)
+        self.chatgpt_url_layout.addWidget(self.chatgpt_edit)
+        
+        # Test connection button (inline with API URL)
+        self.chatgpt_test_button = QPushButton("Test Connection")
+        self.chatgpt_test_button.setToolTip("Test if ChatGPT API is accessible and working")
+        self.chatgpt_test_button.clicked.connect(self.test_chatgpt)
+        self.chatgpt_url_layout.addWidget(self.chatgpt_test_button)
+        
+        self.chatgpt_layout.addLayout(self.chatgpt_url_layout)
+
+        # API Key setting
+        self.chatgpt_api_key_layout = QHBoxLayout()
+        self.chatgpt_api_key_label = QLabel("API Key:")
+        self.chatgpt_api_key_label.setToolTip("ChatGPT/OpenAI API key")
+        self.chatgpt_api_key_layout.addWidget(self.chatgpt_api_key_label)
+        self.chatgpt_api_key_edit = QLineEdit()
+        self.chatgpt_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.chatgpt_api_key_edit.setPlaceholderText("Enter your OpenAI API key")
+        self.chatgpt_api_key_edit.setText(self.config_manager.get_chatgpt_api_key())
+        self.chatgpt_api_key_edit.setToolTip("Enter your OpenAI API key (starts with sk-)")
+        self.chatgpt_api_key_edit.textChanged.connect(self.on_chatgpt_api_key_changed)
+        self.chatgpt_api_key_layout.addWidget(self.chatgpt_api_key_edit)
+        self.chatgpt_layout.addLayout(self.chatgpt_api_key_layout)
+
+        # Model name setting
+        self.chatgpt_model_layout = QHBoxLayout()
+        self.chatgpt_model_label = QLabel("Model Name:")
+        self.chatgpt_model_label.setToolTip("ChatGPT model to use")
+        self.chatgpt_model_layout.addWidget(self.chatgpt_model_label)
+        self.chatgpt_model_edit = QLineEdit()
+        self.chatgpt_model_edit.setPlaceholderText("gpt-3.5-turbo")
+        self.chatgpt_model_edit.setText(self.config_manager.get_chatgpt_model())
+        self.chatgpt_model_edit.setToolTip("Enter model name (e.g., gpt-3.5-turbo, gpt-4)")
+        self.chatgpt_model_edit.textChanged.connect(self.on_chatgpt_model_changed)
+        self.chatgpt_model_layout.addWidget(self.chatgpt_model_edit)
+        self.chatgpt_layout.addLayout(self.chatgpt_model_layout)
+
+        # OCR mode setting for ChatGPT
+        self.chatgpt_ocr_mode_layout = QHBoxLayout()
+        self.chatgpt_ocr_mode_label = QLabel("Text Detection (OCR):")
+        self.chatgpt_ocr_mode_label.setToolTip("OCR engine for detecting text from screen")
+        self.chatgpt_ocr_mode_layout.addWidget(self.chatgpt_ocr_mode_label)
+        self.chatgpt_ocr_mode_combo = QComboBox()
+        self.chatgpt_ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR", "Windows OCR", "EasyOCR"])
+        current_ocr_mode = self.config_manager.get_ocr_mode()
+        ocr_mode_map = {'tesseract': 0, 'paddleocr': 1, 'window_ocr': 2, 'easyocr': 3}
+        self.chatgpt_ocr_mode_combo.setCurrentIndex(ocr_mode_map.get(current_ocr_mode, 0))
+        self.chatgpt_ocr_mode_combo.setToolTip("Tesseract: Free, widely available\nPaddleOCR: Better accuracy\nWindows OCR: Windows native OCR\nEasyOCR: 80+ languages")
+        self.chatgpt_ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_mode_changed)
+        self.chatgpt_ocr_mode_layout.addWidget(self.chatgpt_ocr_mode_combo)
+        # Install button for ChatGPT OCR
+        self.chatgpt_ocr_install_button = QPushButton("Download and Install")
+        self.chatgpt_ocr_install_button.setToolTip("Install the selected OCR engine if not available")
+        self.chatgpt_ocr_install_button.clicked.connect(lambda: self.install_ocr_engine('chatgpt_ocr_mode_combo'))
+        self.chatgpt_ocr_install_button.hide()
+        self.chatgpt_ocr_mode_layout.addWidget(self.chatgpt_ocr_install_button)
+        self.chatgpt_layout.addLayout(self.chatgpt_ocr_mode_layout)
+
+        # Tesseract path setting for ChatGPT
+        self.chatgpt_tesseract_path_layout = QHBoxLayout()
+        self.chatgpt_tesseract_path_label = QLabel("Tesseract Path:")
+        self.chatgpt_tesseract_path_label.setToolTip("Path to tesseract.exe (leave empty if Tesseract is in system PATH)")
+        self.chatgpt_tesseract_path_layout.addWidget(self.chatgpt_tesseract_path_label)
+        self.chatgpt_tesseract_path_edit = QLineEdit()
+        self.chatgpt_tesseract_path_edit.setPlaceholderText("Leave empty to use system PATH")
+        self.chatgpt_tesseract_path_edit.setText(self.config_manager.get_tesseract_path())
+        self.chatgpt_tesseract_path_edit.setToolTip("Enter full path to tesseract.exe, or leave empty if Tesseract is installed and in your system PATH")
+        self.chatgpt_tesseract_path_edit.textChanged.connect(self.on_tesseract_path_changed)
+        self.chatgpt_tesseract_path_layout.addWidget(self.chatgpt_tesseract_path_edit)
+        self.chatgpt_tesseract_browse_button = QPushButton("Browse...")
+        self.chatgpt_tesseract_browse_button.setToolTip("Browse for tesseract.exe file")
+        self.chatgpt_tesseract_browse_button.clicked.connect(self.browse_tesseract_path)
+        self.chatgpt_tesseract_path_layout.addWidget(self.chatgpt_tesseract_browse_button)
+        
+        self.chatgpt_tesseract_test_button = QPushButton("Test")
+        self.chatgpt_tesseract_test_button.setToolTip("Test if Tesseract is installed and working correctly")
+        self.chatgpt_tesseract_test_button.clicked.connect(self.test_tesseract)
+        self.chatgpt_tesseract_path_layout.addWidget(self.chatgpt_tesseract_test_button)
+        self.chatgpt_layout.addLayout(self.chatgpt_tesseract_path_layout)
+
+        # Gemini settings (shown only when gemini mode is selected)
+        self.gemini_group = QGroupBox("✨ Gemini Configuration")
+        self.gemini_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.gemini_group.setToolTip("Configure Gemini API connection (paid, requires Google API key)")
+        self.translation_mode_layout.addWidget(self.gemini_group)
+        self.gemini_layout = QVBoxLayout(self.gemini_group)
+        self.gemini_layout.setSpacing(8)
+
+        # API URL setting
+        self.gemini_url_layout = QHBoxLayout()
+        self.gemini_url_label = QLabel("API URL:")
+        self.gemini_url_label.setToolTip("Gemini API endpoint URL")
+        self.gemini_url_layout.addWidget(self.gemini_url_label)
+        self.gemini_edit = QLineEdit()
+        self.gemini_edit.setText(self.config_manager.get_gemini_url())
+        self.gemini_edit.setPlaceholderText("https://generativelanguage.googleapis.com/v1")
+        self.gemini_edit.setToolTip("Enter Gemini API URL (default: https://generativelanguage.googleapis.com/v1)")
+        self.gemini_edit.textChanged.connect(self.on_gemini_url_changed)
+        self.gemini_url_layout.addWidget(self.gemini_edit)
+        
+        # Test connection button (inline with API URL)
+        self.gemini_test_button = QPushButton("Test Connection")
+        self.gemini_test_button.setToolTip("Test if Gemini API is accessible and working")
+        self.gemini_test_button.clicked.connect(self.test_gemini)
+        self.gemini_url_layout.addWidget(self.gemini_test_button)
+        
+        self.gemini_layout.addLayout(self.gemini_url_layout)
+
+        # API Key setting
+        self.gemini_api_key_layout = QHBoxLayout()
+        self.gemini_api_key_label = QLabel("API Key:")
+        self.gemini_api_key_label.setToolTip("Gemini API key")
+        self.gemini_api_key_layout.addWidget(self.gemini_api_key_label)
+        self.gemini_api_key_edit = QLineEdit()
+        self.gemini_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.gemini_api_key_edit.setPlaceholderText("Enter your Google API key")
+        self.gemini_api_key_edit.setText(self.config_manager.get_gemini_api_key())
+        self.gemini_api_key_edit.setToolTip("Enter your Google Gemini API key")
+        self.gemini_api_key_edit.textChanged.connect(self.on_gemini_api_key_changed)
+        self.gemini_api_key_layout.addWidget(self.gemini_api_key_edit)
+        self.gemini_layout.addLayout(self.gemini_api_key_layout)
+
+        # Model name setting
+        self.gemini_model_layout = QHBoxLayout()
+        self.gemini_model_label = QLabel("Model Name:")
+        self.gemini_model_label.setToolTip("Gemini model to use")
+        self.gemini_model_layout.addWidget(self.gemini_model_label)
+        self.gemini_model_edit = QLineEdit()
+        self.gemini_model_edit.setPlaceholderText("gemini-pro")
+        self.gemini_model_edit.setText(self.config_manager.get_gemini_model())
+        self.gemini_model_edit.setToolTip("Enter model name (e.g., gemini-pro, gemini-ultra)")
+        self.gemini_model_edit.textChanged.connect(self.on_gemini_model_changed)
+        self.gemini_model_layout.addWidget(self.gemini_model_edit)
+        self.gemini_layout.addLayout(self.gemini_model_layout)
+
+        # OCR mode setting for Gemini
+        self.gemini_ocr_mode_layout = QHBoxLayout()
+        self.gemini_ocr_mode_label = QLabel("Text Detection (OCR):")
+        self.gemini_ocr_mode_label.setToolTip("OCR engine for detecting text from screen")
+        self.gemini_ocr_mode_layout.addWidget(self.gemini_ocr_mode_label)
+        self.gemini_ocr_mode_combo = QComboBox()
+        self.gemini_ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR", "Windows OCR", "EasyOCR"])
+        current_ocr_mode = self.config_manager.get_ocr_mode()
+        ocr_mode_map = {'tesseract': 0, 'paddleocr': 1, 'window_ocr': 2, 'easyocr': 3}
+        self.gemini_ocr_mode_combo.setCurrentIndex(ocr_mode_map.get(current_ocr_mode, 0))
+        self.gemini_ocr_mode_combo.setToolTip("Tesseract: Free, widely available\nPaddleOCR: Better accuracy\nWindows OCR: Windows native OCR\nEasyOCR: 80+ languages")
+        self.gemini_ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_mode_changed)
+        self.gemini_ocr_mode_layout.addWidget(self.gemini_ocr_mode_combo)
+        # Install button for Gemini OCR
+        self.gemini_ocr_install_button = QPushButton("Download and Install")
+        self.gemini_ocr_install_button.setToolTip("Install the selected OCR engine if not available")
+        self.gemini_ocr_install_button.clicked.connect(lambda: self.install_ocr_engine('gemini_ocr_mode_combo'))
+        self.gemini_ocr_install_button.hide()
+        self.gemini_ocr_mode_layout.addWidget(self.gemini_ocr_install_button)
+        self.gemini_layout.addLayout(self.gemini_ocr_mode_layout)
+
+        # Tesseract path setting for Gemini
+        self.gemini_tesseract_path_layout = QHBoxLayout()
+        self.gemini_tesseract_path_label = QLabel("Tesseract Path:")
+        self.gemini_tesseract_path_label.setToolTip("Path to tesseract.exe (leave empty if Tesseract is in system PATH)")
+        self.gemini_tesseract_path_layout.addWidget(self.gemini_tesseract_path_label)
+        self.gemini_tesseract_path_edit = QLineEdit()
+        self.gemini_tesseract_path_edit.setPlaceholderText("Leave empty to use system PATH")
+        self.gemini_tesseract_path_edit.setText(self.config_manager.get_tesseract_path())
+        self.gemini_tesseract_path_edit.setToolTip("Enter full path to tesseract.exe, or leave empty if Tesseract is installed and in your system PATH")
+        self.gemini_tesseract_path_edit.textChanged.connect(self.on_tesseract_path_changed)
+        self.gemini_tesseract_path_layout.addWidget(self.gemini_tesseract_path_edit)
+        self.gemini_tesseract_browse_button = QPushButton("Browse...")
+        self.gemini_tesseract_browse_button.setToolTip("Browse for tesseract.exe file")
+        self.gemini_tesseract_browse_button.clicked.connect(self.browse_tesseract_path)
+        self.gemini_tesseract_path_layout.addWidget(self.gemini_tesseract_browse_button)
+        
+        self.gemini_tesseract_test_button = QPushButton("Test")
+        self.gemini_tesseract_test_button.setToolTip("Test if Tesseract is installed and working correctly")
+        self.gemini_tesseract_test_button.clicked.connect(self.test_tesseract)
+        self.gemini_tesseract_path_layout.addWidget(self.gemini_tesseract_test_button)
+        self.gemini_layout.addLayout(self.gemini_tesseract_path_layout)
+
+        # Mistral settings (shown only when mistral mode is selected)
+        self.mistral_group = QGroupBox("🌪️ Mistral Configuration")
+        self.mistral_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.mistral_group.setToolTip("Configure Mistral API connection (paid, requires Mistral API key)")
+        self.translation_mode_layout.addWidget(self.mistral_group)
+        self.mistral_layout = QVBoxLayout(self.mistral_group)
+        self.mistral_layout.setSpacing(8)
+
+        # API URL setting
+        self.mistral_url_layout = QHBoxLayout()
+        self.mistral_url_label = QLabel("API URL:")
+        self.mistral_url_label.setToolTip("Mistral API endpoint URL")
+        self.mistral_url_layout.addWidget(self.mistral_url_label)
+        self.mistral_edit = QLineEdit()
+        self.mistral_edit.setText(self.config_manager.get_mistral_url())
+        self.mistral_edit.setPlaceholderText("https://api.mistral.ai/v1")
+        self.mistral_edit.setToolTip("Enter Mistral API URL (default: https://api.mistral.ai/v1)")
+        self.mistral_edit.textChanged.connect(self.on_mistral_url_changed)
+        self.mistral_url_layout.addWidget(self.mistral_edit)
+        
+        # Test connection button (inline with API URL)
+        self.mistral_test_button = QPushButton("Test Connection")
+        self.mistral_test_button.setToolTip("Test if Mistral API is accessible and working")
+        self.mistral_test_button.clicked.connect(self.test_mistral)
+        self.mistral_url_layout.addWidget(self.mistral_test_button)
+        
+        self.mistral_layout.addLayout(self.mistral_url_layout)
+
+        # API Key setting
+        self.mistral_api_key_layout = QHBoxLayout()
+        self.mistral_api_key_label = QLabel("API Key:")
+        self.mistral_api_key_label.setToolTip("Mistral API key")
+        self.mistral_api_key_layout.addWidget(self.mistral_api_key_label)
+        self.mistral_api_key_edit = QLineEdit()
+        self.mistral_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.mistral_api_key_edit.setPlaceholderText("Enter your Mistral API key")
+        self.mistral_api_key_edit.setText(self.config_manager.get_mistral_api_key())
+        self.mistral_api_key_edit.setToolTip("Enter your Mistral API key")
+        self.mistral_api_key_edit.textChanged.connect(self.on_mistral_api_key_changed)
+        self.mistral_api_key_layout.addWidget(self.mistral_api_key_edit)
+        self.mistral_layout.addLayout(self.mistral_api_key_layout)
+
+        # Model name setting
+        self.mistral_model_layout = QHBoxLayout()
+        self.mistral_model_label = QLabel("Model Name:")
+        self.mistral_model_label.setToolTip("Mistral model to use")
+        self.mistral_model_layout.addWidget(self.mistral_model_label)
+        self.mistral_model_edit = QLineEdit()
+        self.mistral_model_edit.setPlaceholderText("mistral-tiny")
+        self.mistral_model_edit.setText(self.config_manager.get_mistral_model())
+        self.mistral_model_edit.setToolTip("Enter model name (e.g., mistral-tiny, mistral-small, mistral-medium)")
+        self.mistral_model_edit.textChanged.connect(self.on_mistral_model_changed)
+        self.mistral_model_layout.addWidget(self.mistral_model_edit)
+        self.mistral_layout.addLayout(self.mistral_model_layout)
+
+        # OCR mode setting for Mistral
+        self.mistral_ocr_mode_layout = QHBoxLayout()
+        self.mistral_ocr_mode_label = QLabel("Text Detection (OCR):")
+        self.mistral_ocr_mode_label.setToolTip("OCR engine for detecting text from screen")
+        self.mistral_ocr_mode_layout.addWidget(self.mistral_ocr_mode_label)
+        self.mistral_ocr_mode_combo = QComboBox()
+        self.mistral_ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR", "Windows OCR", "EasyOCR"])
+        current_ocr_mode = self.config_manager.get_ocr_mode()
+        ocr_mode_map = {'tesseract': 0, 'paddleocr': 1, 'window_ocr': 2, 'easyocr': 3}
+        self.mistral_ocr_mode_combo.setCurrentIndex(ocr_mode_map.get(current_ocr_mode, 0))
+        self.mistral_ocr_mode_combo.setToolTip("Tesseract: Free, widely available\nPaddleOCR: Better accuracy\nWindows OCR: Windows native OCR\nEasyOCR: 80+ languages")
+        self.mistral_ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_mode_changed)
+        self.mistral_ocr_mode_layout.addWidget(self.mistral_ocr_mode_combo)
+        # Install button for Mistral OCR
+        self.mistral_ocr_install_button = QPushButton("Download and Install")
+        self.mistral_ocr_install_button.setToolTip("Install the selected OCR engine if not available")
+        self.mistral_ocr_install_button.clicked.connect(lambda: self.install_ocr_engine('mistral_ocr_mode_combo'))
+        self.mistral_ocr_install_button.hide()
+        self.mistral_ocr_mode_layout.addWidget(self.mistral_ocr_install_button)
+        self.mistral_layout.addLayout(self.mistral_ocr_mode_layout)
+
+        # Tesseract path setting for Mistral
+        self.mistral_tesseract_path_layout = QHBoxLayout()
+        self.mistral_tesseract_path_label = QLabel("Tesseract Path:")
+        self.mistral_tesseract_path_label.setToolTip("Path to tesseract.exe (leave empty if Tesseract is in system PATH)")
+        self.mistral_tesseract_path_layout.addWidget(self.mistral_tesseract_path_label)
+        self.mistral_tesseract_path_edit = QLineEdit()
+        self.mistral_tesseract_path_edit.setPlaceholderText("Leave empty to use system PATH")
+        self.mistral_tesseract_path_edit.setText(self.config_manager.get_tesseract_path())
+        self.mistral_tesseract_path_edit.setToolTip("Enter full path to tesseract.exe, or leave empty if Tesseract is installed and in your system PATH")
+        self.mistral_tesseract_path_edit.textChanged.connect(self.on_tesseract_path_changed)
+        self.mistral_tesseract_path_layout.addWidget(self.mistral_tesseract_path_edit)
+        self.mistral_tesseract_browse_button = QPushButton("Browse...")
+        self.mistral_tesseract_browse_button.setToolTip("Browse for tesseract.exe file")
+        self.mistral_tesseract_browse_button.clicked.connect(self.browse_tesseract_path)
+        self.mistral_tesseract_path_layout.addWidget(self.mistral_tesseract_browse_button)
+        
+        self.mistral_tesseract_test_button = QPushButton("Test")
+        self.mistral_tesseract_test_button.setToolTip("Test if Tesseract is installed and working correctly")
+        self.mistral_tesseract_test_button.clicked.connect(self.test_tesseract)
+        self.mistral_tesseract_path_layout.addWidget(self.mistral_tesseract_test_button)
+        self.mistral_layout.addLayout(self.mistral_tesseract_path_layout)
 
         # Credentials settings
         self.credentials_group = QGroupBox("☁️ Google Cloud Credentials")
@@ -813,24 +1449,41 @@ class MainWindow(QMainWindow):
         self.add_button.clicked.connect(self.add_area)
         self.buttons_layout.addWidget(self.add_button)
 
-        # Styling buttons
-        for btn in [self.add_button, self.browse_button,
-                    self.name_color_button, self.dialogue_color_button, self.bg_color_button, 
-                    self.hotkey_apply_button, self.add_area_hotkey_apply_button,
-                    self.tesseract_browse_button, self.tesseract_test_button,
-                    self.libretranslate_test_button, self.libretranslate_tesseract_browse_button,
-                    self.libretranslate_tesseract_test_button]:
-            btn.setStyleSheet(
-                f"QPushButton {{ background-color: {self.button_bg}; color: {self.button_fg}; padding: 6px 12px; border-radius: 4px; font-weight: 500; }}"
-                f"QPushButton:hover {{ background-color: {self.secondary_color}; }}"
-                f"QPushButton:disabled {{ background-color: #cccccc; color: #666666; }}"
-            )
+        # Styling buttons - apply consistent styling to all action buttons
+        buttons_to_style_init = [
+            self.add_button, self.browse_button,
+            self.name_color_button, self.dialogue_color_button, self.bg_color_button, 
+            self.hotkey_apply_button, self.add_area_hotkey_apply_button,
+            self.tesseract_browse_button, self.tesseract_test_button,
+            self.libretranslate_test_button, self.libretranslate_tesseract_browse_button,
+            self.libretranslate_tesseract_test_button,
+            # Ollama buttons
+            self.ollama_test_button, self.ollama_tesseract_browse_button, self.ollama_tesseract_test_button,
+            # ChatGPT buttons
+            self.chatgpt_test_button, self.chatgpt_tesseract_browse_button, self.chatgpt_tesseract_test_button,
+            # Gemini buttons
+            self.gemini_test_button, self.gemini_tesseract_browse_button, self.gemini_tesseract_test_button,
+            # Mistral buttons
+            self.mistral_test_button, self.mistral_tesseract_browse_button, self.mistral_tesseract_test_button,
+            # OCR Install buttons
+            self.ocr_install_button, self.libretranslate_ocr_install_button, self.ollama_ocr_install_button,
+            self.chatgpt_ocr_install_button, self.gemini_ocr_install_button, self.mistral_ocr_install_button,
+        ]
+        for btn in buttons_to_style_init:
+            if btn is not None:
+                btn.setStyleSheet(
+                    f"QPushButton {{ background-color: {self.button_bg}; color: {self.button_fg}; padding: 6px 12px; border-radius: 4px; font-weight: 500; }}"
+                    f"QPushButton:hover {{ background-color: {self.secondary_color}; }}"
+                    f"QPushButton:disabled {{ background-color: #cccccc; color: #666666; }}"
+                )
         
         # Show/hide credentials group based on mode
         self.on_translation_mode_changed()
         
         # Initialize Tesseract path field visibility based on OCR mode
         self.on_ocr_mode_changed()
+        # Initialize OCR install button visibility
+        self.update_ocr_install_buttons()
 
         # Translation windows
         self.area_selected = False
@@ -1033,41 +1686,46 @@ class MainWindow(QMainWindow):
 
     def add_area(self):
         """Add a new translation area."""
-        self.hide()
-        screenshot, region = capture_screen_region()
-        if region:
-            x, y, w, h = region
-            # Get existing area IDs
-            existing_ids = set()
-            for i in range(self.areas_tree.topLevelItemCount()):
-                item = self.areas_tree.topLevelItem(i)
-                existing_ids.add(int(item.data(0, Qt.UserRole)))
-            
-            # Find the next available ID
-            new_id = 1
-            while new_id in existing_ids:
-                new_id += 1
-            
-            area_id = str(new_id)
-            item = QTreeWidgetItem([
-                f"Area {area_id}",
-                f"X: {x}, Y: {y}",
-                f"W: {w}, H: {h}",
-                ""  # Empty for Action column, will be filled with button
-            ])
-            item.setData(0, Qt.UserRole, area_id)
-            self.areas_tree.addTopLevelItem(item)
-            # Add action button for this area
-            self._add_action_button(item, area_id)
-            self.save_area_config(area_id, x, y, w, h)
-            self.area_selected = True
-            self.update_button_states()
-            
-            # Select the newly added area and automatically start translation
-            self.areas_tree.setCurrentItem(item)
-            # Use QTimer.singleShot to ensure UI is updated before starting translation
-            QTimer.singleShot(100, self.start_translation)
-        self.show()
+        try:
+            self.hide()
+            screenshot, region = capture_screen_region()
+            if region:
+                x, y, w, h = region
+                # Get existing area IDs
+                existing_ids = set()
+                for i in range(self.areas_tree.topLevelItemCount()):
+                    item = self.areas_tree.topLevelItem(i)
+                    existing_ids.add(int(item.data(0, Qt.UserRole)))
+                
+                # Find the next available ID
+                new_id = 1
+                while new_id in existing_ids:
+                    new_id += 1
+                
+                area_id = str(new_id)
+                item = QTreeWidgetItem([
+                    f"Area {area_id}",
+                    f"X: {x}, Y: {y}",
+                    f"W: {w}, H: {h}",
+                    ""  # Empty for Action column, will be filled with button
+                ])
+                item.setData(0, Qt.UserRole, area_id)
+                self.areas_tree.addTopLevelItem(item)
+                # Add action button for this area
+                self._add_action_button(item, area_id)
+                self.save_area_config(area_id, x, y, w, h)
+                self.area_selected = True
+                self.update_button_states()
+                
+                # Select the newly added area and automatically start translation
+                self.areas_tree.setCurrentItem(item)
+                # Use QTimer.singleShot to ensure UI is updated before starting translation
+                QTimer.singleShot(100, self.start_translation)
+            self.show()
+        except Exception as e:
+            logger.error(f"Error in add_area: {str(e)}", exc_info=True)
+            self.show()  # Make sure window is shown even on error
+            show_error_message(self, "Error", f"Failed to add translation area: {str(e)}")
 
     def _delete_area_by_id(self, area_id: str):
         """Delete an area by its ID."""
@@ -1398,6 +2056,20 @@ class MainWindow(QMainWindow):
                 self.libretranslate_edit.setEnabled(enabled)
             if hasattr(self, 'libretranslate_test_button'):
                 self.libretranslate_test_button.setEnabled(enabled)
+            if hasattr(self, 'ollama_edit'):
+                self.ollama_edit.setEnabled(enabled)
+            if hasattr(self, 'ollama_model_edit'):
+                self.ollama_model_edit.setEnabled(enabled)
+            if hasattr(self, 'ollama_test_button'):
+                self.ollama_test_button.setEnabled(enabled)
+            if hasattr(self, 'ollama_tesseract_path_edit'):
+                self.ollama_tesseract_path_edit.setEnabled(enabled)
+            if hasattr(self, 'ollama_tesseract_browse_button'):
+                self.ollama_tesseract_browse_button.setEnabled(enabled)
+            if hasattr(self, 'ollama_tesseract_test_button'):
+                self.ollama_tesseract_test_button.setEnabled(enabled)
+            if hasattr(self, 'ollama_ocr_mode_combo'):
+                self.ollama_ocr_mode_combo.setEnabled(enabled)
             if hasattr(self, 'libretranslate_ocr_mode_combo'):
                 self.libretranslate_ocr_mode_combo.setEnabled(enabled)
             if hasattr(self, 'libretranslate_tesseract_path_edit'):
@@ -1444,10 +2116,40 @@ class MainWindow(QMainWindow):
                 }}
             """
 
-            # Apply styles to color, browse, and hotkey apply buttons - match Test Connection button style
-            for btn in [self.name_color_button, self.dialogue_color_button, 
-                       self.bg_color_button, self.browse_button, 
-                       self.hotkey_apply_button, self.add_area_hotkey_apply_button]:
+            # Apply styles to color, browse, test connection, and hotkey apply buttons
+            buttons_to_style = [
+                self.name_color_button, self.dialogue_color_button, 
+                self.bg_color_button, self.browse_button, 
+                self.hotkey_apply_button, self.add_area_hotkey_apply_button,
+                # Test Connection buttons
+                getattr(self, 'libretranslate_test_button', None),
+                getattr(self, 'ollama_test_button', None),
+                getattr(self, 'chatgpt_test_button', None),
+                getattr(self, 'gemini_test_button', None),
+                getattr(self, 'mistral_test_button', None),
+                # Browse buttons
+                getattr(self, 'tesseract_browse_button', None),
+                getattr(self, 'libretranslate_tesseract_browse_button', None),
+                getattr(self, 'ollama_tesseract_browse_button', None),
+                getattr(self, 'chatgpt_tesseract_browse_button', None),
+                getattr(self, 'gemini_tesseract_browse_button', None),
+                getattr(self, 'mistral_tesseract_browse_button', None),
+                # Test buttons
+                getattr(self, 'tesseract_test_button', None),
+                getattr(self, 'libretranslate_tesseract_test_button', None),
+                getattr(self, 'ollama_tesseract_test_button', None),
+                getattr(self, 'chatgpt_tesseract_test_button', None),
+                getattr(self, 'gemini_tesseract_test_button', None),
+                getattr(self, 'mistral_tesseract_test_button', None),
+                # OCR Install buttons
+                getattr(self, 'ocr_install_button', None),
+                getattr(self, 'libretranslate_ocr_install_button', None),
+                getattr(self, 'ollama_ocr_install_button', None),
+                getattr(self, 'chatgpt_ocr_install_button', None),
+                getattr(self, 'gemini_ocr_install_button', None),
+                getattr(self, 'mistral_ocr_install_button', None),
+            ]
+            for btn in buttons_to_style:
                 if btn is not None:
                     btn.setStyleSheet(disabled_style if not enabled else enabled_style)
         except Exception as e:
@@ -1549,13 +2251,19 @@ class MainWindow(QMainWindow):
                 'auto_pause_enabled': self.auto_pause_checkbox.isChecked(),
                 'auto_pause_threshold': self.auto_pause_threshold_spinbox.value()
             }
+            # Save all settings to config
             self.config_manager.set_global_setting('font_family', settings['font_family'])
             self.config_manager.set_global_setting('font_size', settings['font_size'])
             self.config_manager.set_global_setting('font_style', settings['font_style'])
             self.config_manager.set_global_setting('name_color', settings['name_color'])
             self.config_manager.set_global_setting('dialogue_color', settings['dialogue_color'])
+            self.config_manager.set_global_setting('background_color', settings['background_color'])
+            self.config_manager.set_global_setting('opacity', settings['opacity'])
             self.config_manager.set_source_language(settings['source_language'])
             self.config_manager.set_target_language(settings['target_language'])
+            self.config_manager.set_global_setting('toggle_hotkey', settings['toggle_hotkey'])
+            self.config_manager.set_auto_pause_enabled(settings['auto_pause_enabled'])
+            self.config_manager.set_auto_pause_threshold(settings['auto_pause_threshold'])
             for translation_window in self.translation_windows.values():
                 if translation_window.isVisible():
                     translation_window.apply_settings(settings)
@@ -1569,6 +2277,9 @@ class MainWindow(QMainWindow):
         try:
             opacity = float(self.opacity_edit.text())
             if 0.01 <= opacity <= 1.0:
+                # Save opacity to config
+                self.config_manager.set_global_setting('opacity', str(opacity))
+                
                 settings = {
                     'font_family': self.font_combo.currentText(),
                     'font_size': self.font_size_edit.text(),
@@ -1893,8 +2604,18 @@ class MainWindow(QMainWindow):
                 mode = 'google'
             elif mode_index == 1:
                 mode = 'local'
-            else:  # mode_index == 2
+            elif mode_index == 2:
                 mode = 'libretranslate'
+            elif mode_index == 3:
+                mode = 'ollama'
+            elif mode_index == 4:
+                mode = 'chatgpt'
+            elif mode_index == 5:
+                mode = 'gemini'
+            elif mode_index == 6:
+                mode = 'mistral'
+            else:
+                mode = 'google'
             self.config_manager.set_translation_mode(mode)
             self.update_translation_mode_ui()
             logger.info(f"Translation mode changed to: {mode}")
@@ -1907,6 +2628,10 @@ class MainWindow(QMainWindow):
             mode = self.config_manager.get_translation_mode()
             is_local_mode = (mode == 'local')
             is_libretranslate_mode = (mode == 'libretranslate')
+            is_ollama_mode = (mode == 'ollama')
+            is_chatgpt_mode = (mode == 'chatgpt')
+            is_gemini_mode = (mode == 'gemini')
+            is_mistral_mode = (mode == 'mistral')
             
             # Show/hide LLM Studio settings (if it exists)
             if hasattr(self, 'llm_studio_group'):
@@ -1916,12 +2641,28 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'libretranslate_group'):
                 self.libretranslate_group.setVisible(is_libretranslate_mode)
             
+            # Show/hide Ollama settings (if it exists)
+            if hasattr(self, 'ollama_group'):
+                self.ollama_group.setVisible(is_ollama_mode)
+            
+            # Show/hide ChatGPT settings (if it exists)
+            if hasattr(self, 'chatgpt_group'):
+                self.chatgpt_group.setVisible(is_chatgpt_mode)
+            
+            # Show/hide Gemini settings (if it exists)
+            if hasattr(self, 'gemini_group'):
+                self.gemini_group.setVisible(is_gemini_mode)
+            
+            # Show/hide Mistral settings (if it exists)
+            if hasattr(self, 'mistral_group'):
+                self.mistral_group.setVisible(is_mistral_mode)
+            
             # Show/hide Google Cloud credentials (if it exists)
             if hasattr(self, 'credentials_group'):
-                self.credentials_group.setVisible(not is_local_mode and not is_libretranslate_mode)
+                self.credentials_group.setVisible(not is_local_mode and not is_libretranslate_mode and not is_ollama_mode and not is_chatgpt_mode and not is_gemini_mode and not is_mistral_mode)
             
             # Update Tesseract path field visibility based on OCR mode
-            if is_local_mode or is_libretranslate_mode:
+            if is_local_mode or is_libretranslate_mode or is_ollama_mode or is_chatgpt_mode or is_gemini_mode or is_mistral_mode:
                 ocr_mode = self.config_manager.get_ocr_mode()
                 is_tesseract_mode = (ocr_mode == 'tesseract')
                 if hasattr(self, 'tesseract_path_layout'):
@@ -1934,6 +2675,38 @@ class MainWindow(QMainWindow):
                         widget = self.libretranslate_tesseract_path_layout.itemAt(i).widget()
                         if widget:
                             widget.setVisible(is_tesseract_mode)
+                if hasattr(self, 'ollama_tesseract_path_layout'):
+                    for i in range(self.ollama_tesseract_path_layout.count()):
+                        widget = self.ollama_tesseract_path_layout.itemAt(i).widget()
+                        if widget:
+                            widget.setVisible(is_tesseract_mode)
+                if hasattr(self, 'chatgpt_tesseract_path_layout'):
+                    for i in range(self.chatgpt_tesseract_path_layout.count()):
+                        widget = self.chatgpt_tesseract_path_layout.itemAt(i).widget()
+                        if widget:
+                            widget.setVisible(is_tesseract_mode)
+                if hasattr(self, 'gemini_tesseract_path_layout'):
+                    for i in range(self.gemini_tesseract_path_layout.count()):
+                        widget = self.gemini_tesseract_path_layout.itemAt(i).widget()
+                        if widget:
+                            widget.setVisible(is_tesseract_mode)
+                if hasattr(self, 'mistral_tesseract_path_layout'):
+                    for i in range(self.mistral_tesseract_path_layout.count()):
+                        widget = self.mistral_tesseract_path_layout.itemAt(i).widget()
+                        if widget:
+                            widget.setVisible(is_tesseract_mode)
+            
+            # Initialize translators when mode changes
+            if is_local_mode:
+                self.init_llm_in_background()
+            elif is_ollama_mode:
+                self.init_ollama_in_background()
+            elif is_chatgpt_mode:
+                self.init_chatgpt_in_background()
+            elif is_gemini_mode:
+                self.init_gemini_in_background()
+            elif is_mistral_mode:
+                self.init_mistral_in_background()
         except Exception as e:
             logger.error(f"Error updating translation mode UI: {str(e)}", exc_info=True)
     
@@ -1967,18 +2740,29 @@ class MainWindow(QMainWindow):
                 mode_index = self.ocr_mode_combo.currentIndex()
             elif hasattr(self, 'libretranslate_ocr_mode_combo') and sender == self.libretranslate_ocr_mode_combo:
                 mode_index = self.libretranslate_ocr_mode_combo.currentIndex()
+            elif hasattr(self, 'ollama_ocr_mode_combo') and sender == self.ollama_ocr_mode_combo:
+                mode_index = self.ollama_ocr_mode_combo.currentIndex()
+            elif hasattr(self, 'chatgpt_ocr_mode_combo') and sender == self.chatgpt_ocr_mode_combo:
+                mode_index = self.chatgpt_ocr_mode_combo.currentIndex()
+            elif hasattr(self, 'gemini_ocr_mode_combo') and sender == self.gemini_ocr_mode_combo:
+                mode_index = self.gemini_ocr_mode_combo.currentIndex()
+            elif hasattr(self, 'mistral_ocr_mode_combo') and sender == self.mistral_ocr_mode_combo:
+                mode_index = self.mistral_ocr_mode_combo.currentIndex()
             else:
                 # Fallback to current config value (used during initialization)
                 current_mode = self.config_manager.get_ocr_mode()
-                mode_index = 0 if current_mode == 'tesseract' else 1
+                ocr_mode_map = {'tesseract': 0, 'paddleocr': 1, 'window_ocr': 2, 'easyocr': 3}
+                mode_index = ocr_mode_map.get(current_mode, 0)
             
-            mode = 'tesseract' if mode_index == 0 else 'paddleocr'
+            # Map index to mode string
+            ocr_modes = ['tesseract', 'paddleocr', 'window_ocr', 'easyocr']
+            mode = ocr_modes[mode_index] if 0 <= mode_index < len(ocr_modes) else 'tesseract'
             
             # Only update config if sender is not None (i.e., user changed it)
             if sender is not None:
                 self.config_manager.set_ocr_mode(mode)
             
-            # Sync both OCR mode combos if they exist
+            # Sync all OCR mode combos if they exist
             if hasattr(self, 'ocr_mode_combo') and sender != self.ocr_mode_combo:
                 self.ocr_mode_combo.blockSignals(True)
                 self.ocr_mode_combo.setCurrentIndex(mode_index)
@@ -1987,6 +2771,160 @@ class MainWindow(QMainWindow):
                 self.libretranslate_ocr_mode_combo.blockSignals(True)
                 self.libretranslate_ocr_mode_combo.setCurrentIndex(mode_index)
                 self.libretranslate_ocr_mode_combo.blockSignals(False)
+            if hasattr(self, 'ollama_ocr_mode_combo') and sender != self.ollama_ocr_mode_combo:
+                self.ollama_ocr_mode_combo.blockSignals(True)
+                self.ollama_ocr_mode_combo.setCurrentIndex(mode_index)
+                self.ollama_ocr_mode_combo.blockSignals(False)
+            if hasattr(self, 'chatgpt_ocr_mode_combo') and sender != self.chatgpt_ocr_mode_combo:
+                self.chatgpt_ocr_mode_combo.blockSignals(True)
+                self.chatgpt_ocr_mode_combo.setCurrentIndex(mode_index)
+                self.chatgpt_ocr_mode_combo.blockSignals(False)
+            if hasattr(self, 'gemini_ocr_mode_combo') and sender != self.gemini_ocr_mode_combo:
+                self.gemini_ocr_mode_combo.blockSignals(True)
+                self.gemini_ocr_mode_combo.setCurrentIndex(mode_index)
+                self.gemini_ocr_mode_combo.blockSignals(False)
+            if hasattr(self, 'mistral_ocr_mode_combo') and sender != self.mistral_ocr_mode_combo:
+                self.mistral_ocr_mode_combo.blockSignals(True)
+                self.mistral_ocr_mode_combo.setCurrentIndex(mode_index)
+                self.mistral_ocr_mode_combo.blockSignals(False)
+            
+            # Check availability and show/hide install buttons
+            self.update_ocr_install_buttons()
+        except Exception as e:
+            logger.error(f"Error in on_ocr_mode_changed: {str(e)}", exc_info=True)
+    
+    def update_ocr_install_buttons(self):
+        """Update visibility of OCR install buttons based on availability."""
+        try:
+            current_ocr_mode = self.config_manager.get_ocr_mode()
+            is_available = check_ocr_availability(current_ocr_mode)
+            
+            # Update all install buttons
+            install_buttons = [
+                ('ocr_install_button',),
+                ('libretranslate_ocr_install_button',),
+                ('ollama_ocr_install_button',),
+                ('chatgpt_ocr_install_button',),
+                ('gemini_ocr_install_button',),
+                ('mistral_ocr_install_button',),
+            ]
+            
+            for button_attr in install_buttons:
+                button_attr = button_attr[0]  # Unpack tuple
+                if hasattr(self, button_attr):
+                    button = getattr(self, button_attr)
+                    # Show button if OCR is not available
+                    button.setVisible(not is_available)
+        except Exception as e:
+            logger.error(f"Error updating OCR install buttons: {str(e)}", exc_info=True)
+    
+    def install_ocr_engine(self, combo_name: str):
+        """Install the selected OCR engine."""
+        try:
+            # Get the combo box
+            combo = getattr(self, combo_name, None)
+            if not combo:
+                QMessageBox.warning(self, "Error", "Could not find OCR combo box.")
+                return
+            
+            # Get selected OCR mode
+            mode_index = combo.currentIndex()
+            ocr_modes = ['tesseract', 'paddleocr', 'window_ocr', 'easyocr']
+            if mode_index < 0 or mode_index >= len(ocr_modes):
+                QMessageBox.warning(self, "Error", "Invalid OCR selection.")
+                return
+            
+            ocr_mode = ocr_modes[mode_index]
+            
+            # Check if already available
+            if check_ocr_availability(ocr_mode):
+                QMessageBox.information(self, "Already Installed", f"{ocr_mode} is already installed and available.")
+                self.update_ocr_install_buttons()
+                return
+            
+            # Confirm installation
+            install_cmd = get_ocr_install_command(ocr_mode)
+            reply = QMessageBox.question(
+                self,
+                "Install OCR Engine",
+                f"Install {ocr_mode}?\n\nThis will run: {install_cmd}\n\nThis may take several minutes. Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            
+            if reply != QMessageBox.Yes:
+                return
+            
+            # Disable install button during installation
+            install_button_attrs = [
+                'ocr_install_button',
+                'libretranslate_ocr_install_button',
+                'ollama_ocr_install_button',
+                'chatgpt_ocr_install_button',
+                'gemini_ocr_install_button',
+                'mistral_ocr_install_button',
+            ]
+            
+            for attr in install_button_attrs:
+                if hasattr(self, attr):
+                    button = getattr(self, attr)
+                    button.setEnabled(False)
+                    button.setText("Installing...")
+            
+            # Create and start installation thread
+            self.ocr_install_thread = OCRInstallationThread(ocr_mode)
+            self.ocr_install_thread.progress.connect(lambda msg: logger.info(f"OCR Install: {msg}"))
+            self.ocr_install_thread.finished.connect(
+                lambda success, msg: self.on_ocr_installation_finished(success, msg, ocr_mode)
+            )
+            self.ocr_install_thread.start()
+            
+        except Exception as e:
+            logger.error(f"Error installing OCR engine: {str(e)}", exc_info=True)
+            QMessageBox.critical(self, "Installation Error", f"Error starting installation: {str(e)}")
+            # Re-enable buttons
+            self.update_ocr_install_buttons()
+    
+    def on_ocr_installation_finished(self, success: bool, message: str, ocr_mode: str):
+        """Handle OCR installation completion."""
+        try:
+            # Re-enable all install buttons
+            install_button_attrs = [
+                'ocr_install_button',
+                'libretranslate_ocr_install_button',
+                'ollama_ocr_install_button',
+                'chatgpt_ocr_install_button',
+                'gemini_ocr_install_button',
+                'mistral_ocr_install_button',
+            ]
+            
+            for attr in install_button_attrs:
+                if hasattr(self, attr):
+                    button = getattr(self, attr)
+                    button.setEnabled(True)
+                    button.setText("Download and Install")
+            
+            if success:
+                QMessageBox.information(
+                    self,
+                    "Installation Successful",
+                    f"{message}\n\nPlease restart the application for changes to take effect."
+                )
+                # Reload OCR availability (requires restart, but update UI anyway)
+                # Note: Actual availability check requires module reload, which needs restart
+                self.update_ocr_install_buttons()
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Installation Failed",
+                    f"{message}\n\nYou may need to install manually using:\n{get_ocr_install_command(ocr_mode)}"
+                )
+                
+        except Exception as e:
+            logger.error(f"Error handling OCR installation completion: {str(e)}", exc_info=True)
+            
+            # Check availability and show/hide install buttons
+            self.update_ocr_install_buttons()
             
             # Update Tesseract path field visibility based on OCR mode
             is_tesseract_mode = (mode == 'tesseract')
@@ -1998,6 +2936,26 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'libretranslate_tesseract_path_layout'):
                 for i in range(self.libretranslate_tesseract_path_layout.count()):
                     widget = self.libretranslate_tesseract_path_layout.itemAt(i).widget()
+                    if widget:
+                        widget.setVisible(is_tesseract_mode)
+            if hasattr(self, 'ollama_tesseract_path_layout'):
+                for i in range(self.ollama_tesseract_path_layout.count()):
+                    widget = self.ollama_tesseract_path_layout.itemAt(i).widget()
+                    if widget:
+                        widget.setVisible(is_tesseract_mode)
+            if hasattr(self, 'chatgpt_tesseract_path_layout'):
+                for i in range(self.chatgpt_tesseract_path_layout.count()):
+                    widget = self.chatgpt_tesseract_path_layout.itemAt(i).widget()
+                    if widget:
+                        widget.setVisible(is_tesseract_mode)
+            if hasattr(self, 'gemini_tesseract_path_layout'):
+                for i in range(self.gemini_tesseract_path_layout.count()):
+                    widget = self.gemini_tesseract_path_layout.itemAt(i).widget()
+                    if widget:
+                        widget.setVisible(is_tesseract_mode)
+            if hasattr(self, 'mistral_tesseract_path_layout'):
+                for i in range(self.mistral_tesseract_path_layout.count()):
+                    widget = self.mistral_tesseract_path_layout.itemAt(i).widget()
                     if widget:
                         widget.setVisible(is_tesseract_mode)
             
@@ -2014,12 +2972,28 @@ class MainWindow(QMainWindow):
                 path = self.tesseract_path_edit.text().strip()
             elif hasattr(self, 'libretranslate_tesseract_path_edit') and sender == self.libretranslate_tesseract_path_edit:
                 path = self.libretranslate_tesseract_path_edit.text().strip()
+            elif hasattr(self, 'ollama_tesseract_path_edit') and sender == self.ollama_tesseract_path_edit:
+                path = self.ollama_tesseract_path_edit.text().strip()
+            elif hasattr(self, 'chatgpt_tesseract_path_edit') and sender == self.chatgpt_tesseract_path_edit:
+                path = self.chatgpt_tesseract_path_edit.text().strip()
+            elif hasattr(self, 'gemini_tesseract_path_edit') and sender == self.gemini_tesseract_path_edit:
+                path = self.gemini_tesseract_path_edit.text().strip()
+            elif hasattr(self, 'mistral_tesseract_path_edit') and sender == self.mistral_tesseract_path_edit:
+                path = self.mistral_tesseract_path_edit.text().strip()
             else:
                 # Fallback: try to get from whichever is visible
                 if hasattr(self, 'tesseract_path_edit') and self.tesseract_path_edit.isVisible():
                     path = self.tesseract_path_edit.text().strip()
                 elif hasattr(self, 'libretranslate_tesseract_path_edit') and self.libretranslate_tesseract_path_edit.isVisible():
                     path = self.libretranslate_tesseract_path_edit.text().strip()
+                elif hasattr(self, 'ollama_tesseract_path_edit') and self.ollama_tesseract_path_edit.isVisible():
+                    path = self.ollama_tesseract_path_edit.text().strip()
+                elif hasattr(self, 'chatgpt_tesseract_path_edit') and self.chatgpt_tesseract_path_edit.isVisible():
+                    path = self.chatgpt_tesseract_path_edit.text().strip()
+                elif hasattr(self, 'gemini_tesseract_path_edit') and self.gemini_tesseract_path_edit.isVisible():
+                    path = self.gemini_tesseract_path_edit.text().strip()
+                elif hasattr(self, 'mistral_tesseract_path_edit') and self.mistral_tesseract_path_edit.isVisible():
+                    path = self.mistral_tesseract_path_edit.text().strip()
                 else:
                     path = self.config_manager.get_tesseract_path()
             
@@ -2032,9 +3006,10 @@ class MainWindow(QMainWindow):
                 elif os.name == 'nt' and not path.lower().endswith('.exe'):
                     logger.warning(f"Tesseract path should point to .exe file: {path}")
             
+            # Save to config
             self.config_manager.set_tesseract_path(path)
             
-            # Sync both fields if they exist (to keep them in sync)
+            # Sync all fields if they exist (to keep them in sync)
             if hasattr(self, 'tesseract_path_edit') and sender != self.tesseract_path_edit:
                 self.tesseract_path_edit.blockSignals(True)
                 self.tesseract_path_edit.setText(path)
@@ -2043,6 +3018,22 @@ class MainWindow(QMainWindow):
                 self.libretranslate_tesseract_path_edit.blockSignals(True)
                 self.libretranslate_tesseract_path_edit.setText(path)
                 self.libretranslate_tesseract_path_edit.blockSignals(False)
+            if hasattr(self, 'ollama_tesseract_path_edit') and sender != self.ollama_tesseract_path_edit:
+                self.ollama_tesseract_path_edit.blockSignals(True)
+                self.ollama_tesseract_path_edit.setText(path)
+                self.ollama_tesseract_path_edit.blockSignals(False)
+            if hasattr(self, 'chatgpt_tesseract_path_edit') and sender != self.chatgpt_tesseract_path_edit:
+                self.chatgpt_tesseract_path_edit.blockSignals(True)
+                self.chatgpt_tesseract_path_edit.setText(path)
+                self.chatgpt_tesseract_path_edit.blockSignals(False)
+            if hasattr(self, 'gemini_tesseract_path_edit') and sender != self.gemini_tesseract_path_edit:
+                self.gemini_tesseract_path_edit.blockSignals(True)
+                self.gemini_tesseract_path_edit.setText(path)
+                self.gemini_tesseract_path_edit.blockSignals(False)
+            if hasattr(self, 'mistral_tesseract_path_edit') and sender != self.mistral_tesseract_path_edit:
+                self.mistral_tesseract_path_edit.blockSignals(True)
+                self.mistral_tesseract_path_edit.setText(path)
+                self.mistral_tesseract_path_edit.blockSignals(False)
             
             logger.info(f"Tesseract path changed to: {path if path else 'system PATH'}")
         except Exception as e:
@@ -2325,4 +3316,441 @@ class MainWindow(QMainWindow):
                 self,
                 "Test Error",
                 f"An error occurred while testing LibreTranslate:\n{str(e)}"
+            )
+    
+    def on_ollama_url_changed(self):
+        """Handle Ollama URL change."""
+        try:
+            url = self.ollama_edit.text()
+            if url:
+                self.config_manager.set_ollama_url(url)
+                logger.info(f"Ollama URL changed to: {url}")
+                # Reinitialize Ollama translator if in ollama mode
+                if self.config_manager.get_translation_mode() == 'ollama':
+                    self.init_ollama_in_background()
+        except Exception as e:
+            logger.error(f"Error changing Ollama URL: {str(e)}", exc_info=True)
+    
+    def on_ollama_model_changed(self):
+        """Handle Ollama model name change."""
+        try:
+            model = self.ollama_model_edit.text()
+            self.config_manager.set_ollama_model(model)
+            logger.info(f"Ollama model changed to: {model if model else 'auto-detect'}")
+            # Reinitialize Ollama translator if in ollama mode
+            if self.config_manager.get_translation_mode() == 'ollama':
+                self.init_ollama_in_background()
+        except Exception as e:
+            logger.error(f"Error changing Ollama model: {str(e)}", exc_info=True)
+    
+    def test_ollama(self):
+        """Test if Ollama API is accessible."""
+        try:
+            from src.translator.ollama_translator import OllamaTranslator
+            from PyQt5.QtWidgets import QMessageBox
+            
+            url = self.ollama_edit.text() or self.config_manager.get_ollama_url()
+            model = self.ollama_model_edit.text() or None
+            if not url:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    "Please enter an Ollama API URL."
+                )
+                return
+            
+            translator = OllamaTranslator(url, model_name=model)
+            if translator.test_connection():
+                QMessageBox.information(
+                    self,
+                    "Test Successful",
+                    f"Ollama connection successful!\n\n"
+                    f"API URL: {url}\n"
+                    f"Model: {model or 'auto-detect'}\n\n"
+                    "The API is ready to use."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    f"Could not connect to Ollama API.\n\n"
+                    f"API URL: {url}\n\n"
+                    "Please check:\n"
+                    "1. The Ollama server is running\n"
+                    "2. The URL is correct (default: http://localhost:11434)\n"
+                    "3. The server is accessible from this computer\n"
+                    "4. You have at least one model installed (run: ollama pull llama2)"
+                )
+        except Exception as e:
+            logger.error(f"Error testing Ollama: {str(e)}", exc_info=True)
+    
+    def init_chatgpt_in_background(self):
+        """Initialize ChatGPT translator in a background thread."""
+        try:
+            logger.info("Starting ChatGPT initialization in background thread...")
+            chatgpt_url = self.config_manager.get_chatgpt_url()
+            chatgpt_api_key = self.config_manager.get_chatgpt_api_key()
+            chatgpt_model = self.config_manager.get_chatgpt_model()
+            
+            if not chatgpt_api_key:
+                logger.warning("ChatGPT API key is not set")
+                return
+            
+            self.chatgpt_init_thread = ChatGPTInitializationThread(chatgpt_url, chatgpt_api_key, chatgpt_model)
+            self.chatgpt_init_thread.initialized.connect(self.on_chatgpt_initialized)
+            self.chatgpt_init_thread.error.connect(self.on_chatgpt_initialization_error)
+            self.chatgpt_init_thread.finished.connect(self.on_chatgpt_thread_finished)
+            self.chatgpt_init_thread.start()
+        except Exception as e:
+            logger.error(f"Error starting ChatGPT initialization thread: {str(e)}", exc_info=True)
+    
+    def on_chatgpt_initialized(self, chatgpt_translator):
+        """Handle successful ChatGPT initialization."""
+        try:
+            logger.info("ChatGPT translator initialized successfully, updating TextProcessor")
+            self.text_processor.set_chatgpt_translator(chatgpt_translator)
+            logger.info("TextProcessor updated with ChatGPT translator")
+        except Exception as e:
+            logger.error(f"Error updating TextProcessor with ChatGPT translator: {str(e)}", exc_info=True)
+    
+    def on_chatgpt_initialization_error(self, error_msg: str):
+        """Handle ChatGPT initialization error."""
+        logger.warning(f"ChatGPT initialization error: {error_msg}")
+    
+    def on_chatgpt_thread_finished(self):
+        """Handle ChatGPT initialization thread completion."""
+        logger.info("ChatGPT initialization thread finished")
+        self.chatgpt_init_thread = None
+    
+    def init_gemini_in_background(self):
+        """Initialize Gemini translator in a background thread."""
+        try:
+            logger.info("Starting Gemini initialization in background thread...")
+            gemini_url = self.config_manager.get_gemini_url()
+            gemini_api_key = self.config_manager.get_gemini_api_key()
+            gemini_model = self.config_manager.get_gemini_model()
+            
+            if not gemini_api_key:
+                logger.warning("Gemini API key is not set")
+                return
+            
+            self.gemini_init_thread = GeminiInitializationThread(gemini_url, gemini_api_key, gemini_model)
+            self.gemini_init_thread.initialized.connect(self.on_gemini_initialized)
+            self.gemini_init_thread.error.connect(self.on_gemini_initialization_error)
+            self.gemini_init_thread.finished.connect(self.on_gemini_thread_finished)
+            self.gemini_init_thread.start()
+        except Exception as e:
+            logger.error(f"Error starting Gemini initialization thread: {str(e)}", exc_info=True)
+    
+    def on_gemini_initialized(self, gemini_translator):
+        """Handle successful Gemini initialization."""
+        try:
+            logger.info("Gemini translator initialized successfully, updating TextProcessor")
+            self.text_processor.set_gemini_translator(gemini_translator)
+            logger.info("TextProcessor updated with Gemini translator")
+        except Exception as e:
+            logger.error(f"Error updating TextProcessor with Gemini translator: {str(e)}", exc_info=True)
+    
+    def on_gemini_initialization_error(self, error_msg: str):
+        """Handle Gemini initialization error."""
+        logger.warning(f"Gemini initialization error: {error_msg}")
+    
+    def on_gemini_thread_finished(self):
+        """Handle Gemini initialization thread completion."""
+        logger.info("Gemini initialization thread finished")
+        self.gemini_init_thread = None
+    
+    def init_mistral_in_background(self):
+        """Initialize Mistral translator in a background thread."""
+        try:
+            logger.info("Starting Mistral initialization in background thread...")
+            mistral_url = self.config_manager.get_mistral_url()
+            mistral_api_key = self.config_manager.get_mistral_api_key()
+            mistral_model = self.config_manager.get_mistral_model()
+            
+            if not mistral_api_key:
+                logger.warning("Mistral API key is not set")
+                return
+            
+            self.mistral_init_thread = MistralInitializationThread(mistral_url, mistral_api_key, mistral_model)
+            self.mistral_init_thread.initialized.connect(self.on_mistral_initialized)
+            self.mistral_init_thread.error.connect(self.on_mistral_initialization_error)
+            self.mistral_init_thread.finished.connect(self.on_mistral_thread_finished)
+            self.mistral_init_thread.start()
+        except Exception as e:
+            logger.error(f"Error starting Mistral initialization thread: {str(e)}", exc_info=True)
+    
+    def on_mistral_initialized(self, mistral_translator):
+        """Handle successful Mistral initialization."""
+        try:
+            logger.info("Mistral translator initialized successfully, updating TextProcessor")
+            self.text_processor.set_mistral_translator(mistral_translator)
+            logger.info("TextProcessor updated with Mistral translator")
+        except Exception as e:
+            logger.error(f"Error updating TextProcessor with Mistral translator: {str(e)}", exc_info=True)
+    
+    def on_mistral_initialization_error(self, error_msg: str):
+        """Handle Mistral initialization error."""
+        logger.warning(f"Mistral initialization error: {error_msg}")
+    
+    def on_mistral_thread_finished(self):
+        """Handle Mistral initialization thread completion."""
+        logger.info("Mistral initialization thread finished")
+        self.mistral_init_thread = None
+    
+    def on_chatgpt_url_changed(self):
+        """Handle ChatGPT URL change."""
+        try:
+            url = self.chatgpt_edit.text()
+            if url:
+                self.config_manager.set_chatgpt_url(url)
+                logger.info(f"ChatGPT URL changed to: {url}")
+        except Exception as e:
+            logger.error(f"Error changing ChatGPT URL: {str(e)}", exc_info=True)
+    
+    def on_chatgpt_api_key_changed(self):
+        """Handle ChatGPT API key change."""
+        try:
+            api_key = self.chatgpt_api_key_edit.text()
+            self.config_manager.set_chatgpt_api_key(api_key)
+            logger.info(f"ChatGPT API key changed")
+        except Exception as e:
+            logger.error(f"Error changing ChatGPT API key: {str(e)}", exc_info=True)
+    
+    def on_chatgpt_model_changed(self):
+        """Handle ChatGPT model name change."""
+        try:
+            model = self.chatgpt_model_edit.text()
+            self.config_manager.set_chatgpt_model(model)
+            logger.info(f"ChatGPT model changed to: {model}")
+        except Exception as e:
+            logger.error(f"Error changing ChatGPT model: {str(e)}", exc_info=True)
+    
+    def test_chatgpt(self):
+        """Test if ChatGPT API is accessible."""
+        try:
+            from src.translator.chatgpt_translator import ChatGPTTranslator
+            from PyQt5.QtWidgets import QMessageBox
+            
+            url = self.chatgpt_edit.text() or self.config_manager.get_chatgpt_url()
+            api_key = self.chatgpt_api_key_edit.text() or self.config_manager.get_chatgpt_api_key()
+            model = self.chatgpt_model_edit.text() or self.config_manager.get_chatgpt_model()
+            
+            if not url:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    "Please enter a ChatGPT API URL."
+                )
+                return
+            
+            if not api_key:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    "Please enter a ChatGPT API key."
+                )
+                return
+            
+            translator = ChatGPTTranslator(url, api_key, model)
+            if translator.test_connection():
+                QMessageBox.information(
+                    self,
+                    "Test Successful",
+                    f"ChatGPT connection successful!\n\n"
+                    f"API URL: {url}\n"
+                    f"Model: {model}\n\n"
+                    "The API is ready to use."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    f"Could not connect to ChatGPT API.\n\n"
+                    f"API URL: {url}\n\n"
+                    "Please check:\n"
+                    "1. The API key is correct\n"
+                    "2. The URL is correct (default: https://api.openai.com/v1)\n"
+                    "3. You have sufficient API credits\n"
+                    "4. The model name is valid"
+                )
+        except Exception as e:
+            logger.error(f"Error testing ChatGPT: {str(e)}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Test Error",
+                f"An error occurred while testing ChatGPT:\n\n{str(e)}"
+            )
+    
+    def on_gemini_url_changed(self):
+        """Handle Gemini URL change."""
+        try:
+            url = self.gemini_edit.text()
+            if url:
+                self.config_manager.set_gemini_url(url)
+                logger.info(f"Gemini URL changed to: {url}")
+        except Exception as e:
+            logger.error(f"Error changing Gemini URL: {str(e)}", exc_info=True)
+    
+    def on_gemini_api_key_changed(self):
+        """Handle Gemini API key change."""
+        try:
+            api_key = self.gemini_api_key_edit.text()
+            self.config_manager.set_gemini_api_key(api_key)
+            logger.info(f"Gemini API key changed")
+        except Exception as e:
+            logger.error(f"Error changing Gemini API key: {str(e)}", exc_info=True)
+    
+    def on_gemini_model_changed(self):
+        """Handle Gemini model name change."""
+        try:
+            model = self.gemini_model_edit.text()
+            self.config_manager.set_gemini_model(model)
+            logger.info(f"Gemini model changed to: {model}")
+        except Exception as e:
+            logger.error(f"Error changing Gemini model: {str(e)}", exc_info=True)
+    
+    def test_gemini(self):
+        """Test if Gemini API is accessible."""
+        try:
+            from src.translator.gemini_translator import GeminiTranslator
+            from PyQt5.QtWidgets import QMessageBox
+            
+            url = self.gemini_edit.text() or self.config_manager.get_gemini_url()
+            api_key = self.gemini_api_key_edit.text() or self.config_manager.get_gemini_api_key()
+            model = self.gemini_model_edit.text() or self.config_manager.get_gemini_model()
+            
+            if not url:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    "Please enter a Gemini API URL."
+                )
+                return
+            
+            if not api_key:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    "Please enter a Gemini API key."
+                )
+                return
+            
+            translator = GeminiTranslator(url, api_key, model)
+            if translator.test_connection():
+                QMessageBox.information(
+                    self,
+                    "Test Successful",
+                    f"Gemini connection successful!\n\n"
+                    f"API URL: {url}\n"
+                    f"Model: {model}\n\n"
+                    "The API is ready to use."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    f"Could not connect to Gemini API.\n\n"
+                    f"API URL: {url}\n\n"
+                    "Please check:\n"
+                    "1. The API key is correct\n"
+                    "2. The URL is correct (default: https://generativelanguage.googleapis.com/v1)\n"
+                    "3. You have sufficient API credits\n"
+                    "4. The model name is valid"
+                )
+        except Exception as e:
+            logger.error(f"Error testing Gemini: {str(e)}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Test Error",
+                f"An error occurred while testing Gemini:\n\n{str(e)}"
+            )
+    
+    def on_mistral_url_changed(self):
+        """Handle Mistral URL change."""
+        try:
+            url = self.mistral_edit.text()
+            if url:
+                self.config_manager.set_mistral_url(url)
+                logger.info(f"Mistral URL changed to: {url}")
+        except Exception as e:
+            logger.error(f"Error changing Mistral URL: {str(e)}", exc_info=True)
+    
+    def on_mistral_api_key_changed(self):
+        """Handle Mistral API key change."""
+        try:
+            api_key = self.mistral_api_key_edit.text()
+            self.config_manager.set_mistral_api_key(api_key)
+            logger.info(f"Mistral API key changed")
+        except Exception as e:
+            logger.error(f"Error changing Mistral API key: {str(e)}", exc_info=True)
+    
+    def on_mistral_model_changed(self):
+        """Handle Mistral model name change."""
+        try:
+            model = self.mistral_model_edit.text()
+            self.config_manager.set_mistral_model(model)
+            logger.info(f"Mistral model changed to: {model}")
+        except Exception as e:
+            logger.error(f"Error changing Mistral model: {str(e)}", exc_info=True)
+    
+    def test_mistral(self):
+        """Test if Mistral API is accessible."""
+        try:
+            from src.translator.mistral_translator import MistralTranslator
+            from PyQt5.QtWidgets import QMessageBox
+            
+            url = self.mistral_edit.text() or self.config_manager.get_mistral_url()
+            api_key = self.mistral_api_key_edit.text() or self.config_manager.get_mistral_api_key()
+            model = self.mistral_model_edit.text() or self.config_manager.get_mistral_model()
+            
+            if not url:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    "Please enter a Mistral API URL."
+                )
+                return
+            
+            if not api_key:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    "Please enter a Mistral API key."
+                )
+                return
+            
+            translator = MistralTranslator(url, api_key, model)
+            if translator.test_connection():
+                QMessageBox.information(
+                    self,
+                    "Test Successful",
+                    f"Mistral connection successful!\n\n"
+                    f"API URL: {url}\n"
+                    f"Model: {model}\n\n"
+                    "The API is ready to use."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    f"Could not connect to Mistral API.\n\n"
+                    f"API URL: {url}\n\n"
+                    "Please check:\n"
+                    "1. The API key is correct\n"
+                    "2. The URL is correct (default: https://api.mistral.ai/v1)\n"
+                    "3. You have sufficient API credits\n"
+                    "4. The model name is valid"
+                )
+        except Exception as e:
+            logger.error(f"Error testing Mistral: {str(e)}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Test Error",
+                f"An error occurred while testing Mistral:\n\n{str(e)}"
+            )
+            QMessageBox.critical(
+                self,
+                "Test Error",
+                f"An error occurred while testing Ollama:\n{str(e)}"
             )
