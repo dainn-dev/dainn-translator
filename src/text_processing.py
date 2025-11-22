@@ -223,61 +223,30 @@ class TextProcessor:
             if not hasattr(self, '_paddleocr_instance'):
                 logger.info("Initializing PaddleOCR with PP-OCRv4 model...")
                 # Use PP-OCRv4 model for better accuracy
-                # PP-OCRv4 provides improved accuracy compared to PP-OCR
-                # Use_lang parameter supports multiple languages
-                # Common language codes: 'ch', 'en', 'korean', 'japan', etc.
-                # For multilingual support, can use 'ch' (Chinese) or 'en' (English) as base
+                # PP-OCRv4 provides improved accuracy compared to older PP-OCR versions
+                # Note: Requires PaddleOCR 2.7.0+ for ocr_version parameter support
+                # Note: GPU is automatically detected and used in PaddleOCR 3.x+
                 try:
-                    # Try to initialize with PP-OCRv4 explicitly
-                    # Check which parameters are supported by the installed PaddleOCR version
-                    import inspect
-                    init_signature = inspect.signature(PaddleOCR.__init__)
-                    supported_params = set(init_signature.parameters.keys())
-                    
-                    # Build initialization parameters based on what's supported
-                    init_params = {}
-                    
-                    # Check and add ocr_version if supported
-                    if 'ocr_version' in supported_params:
-                        init_params['ocr_version'] = 'PP-OCRv4'
-                    
-                    # Check and add use_angle_cls if supported
-                    if 'use_angle_cls' in supported_params:
-                        init_params['use_angle_cls'] = True
-                    
-                    # Check and add lang if supported
-                    if 'lang' in supported_params:
-                        init_params['lang'] = 'en'
-                    
-                    # Check and add use_gpu if supported (older versions)
-                    # Note: Newer PaddleOCR 3.x versions don't use use_gpu parameter
-                    if 'use_gpu' in supported_params:
-                        init_params['use_gpu'] = False
-                    
-                    # Try initialization with collected parameters
-                    try:
-                        logger.debug(f"Initializing PaddleOCR with parameters: {init_params}")
-                        self._paddleocr_instance = PaddleOCR(**init_params)
-                        model_version = init_params.get('ocr_version', 'default')
-                        logger.info(f"PaddleOCR initialized successfully with {model_version} model")
-                    except (TypeError, ValueError) as e:
-                        # If specific parameters failed, try with minimal parameters
-                        logger.warning(f"Failed to initialize with specified parameters, trying minimal config: {e}")
-                        minimal_params = {}
-                        if 'lang' in supported_params:
-                            minimal_params['lang'] = 'en'
-                        
-                        if minimal_params:
-                            self._paddleocr_instance = PaddleOCR(**minimal_params)
-                        else:
-                            # Last resort: no parameters
-                            self._paddleocr_instance = PaddleOCR()
-                        logger.info("PaddleOCR initialized successfully with minimal configuration")
-                        
+                    # Initialize PaddleOCR with PP-OCRv4 explicitly
+                    self._paddleocr_instance = PaddleOCR(
+                        ocr_version='PP-OCRv4',
+                        lang='en',
+                        use_angle_cls=True
+                    )
+                    logger.info("PaddleOCR initialized successfully with PP-OCRv4 model")
                 except Exception as e:
-                    # Other initialization errors
-                    logger.error(f"Error initializing PaddleOCR: {e}", exc_info=True)
-                    raise
+                    # If initialization fails, try without ocr_version (newer versions default to PP-OCRv4)
+                    error_msg = str(e).lower()
+                    if 'ocr_version' in error_msg or 'unknown argument' in error_msg:
+                        logger.warning(f"ocr_version parameter not supported, using default PP-OCRv4: {e}")
+                        self._paddleocr_instance = PaddleOCR(
+                            lang='en',
+                            use_angle_cls=True
+                        )
+                        logger.info("PaddleOCR initialized successfully (using default PP-OCRv4 model)")
+                    else:
+                        logger.error(f"Error initializing PaddleOCR with PP-OCRv4: {e}", exc_info=True)
+                        raise
             
             # Convert numpy array to RGB if needed (PaddleOCR expects RGB)
             if len(image.shape) == 3 and image.shape[2] == 3:

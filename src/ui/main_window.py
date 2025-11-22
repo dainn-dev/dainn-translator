@@ -116,15 +116,16 @@ class HotkeyInput(QLineEdit):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setPlaceholderText("Press a key combination...")
+        self.setPlaceholderText("Click here, then press your keys...")
         self.setReadOnly(True)
         self.installEventFilter(self)
         self.setStyleSheet("""
             QLineEdit {
-                padding: 5px;
+                padding: 6px;
                 border: 2px solid #2196F3;
-                border-radius: 3px;
+                border-radius: 4px;
                 background-color: white;
+                font-size: 10pt;
             }
             QLineEdit:focus {
                 border: 2px solid #1976D2;
@@ -214,8 +215,10 @@ class MainWindow(QMainWindow):
     
     def __init__(self, text_processor: TextProcessor, config_manager: ConfigManager = None):
         super().__init__()
-        self.setWindowTitle("Real-time Screen Translator")
+        self.setWindowTitle("Real-time Screen Translator - Settings & Areas")
         self.setGeometry(100, 100, 900, 400)
+        # Set minimum window size to prevent window from being too small
+        self.setMinimumSize(1000, 800)  # Minimum width: 700px, Minimum height: 400px
         try:
             self.setWindowIcon(QIcon(os.path.join(os.path.dirname(__file__), "../../resources/logo.ico")))
         except Exception as e:
@@ -250,14 +253,19 @@ class MainWindow(QMainWindow):
         self.version_check_timer.timeout.connect(self.check_for_updates)
         self.version_check_timer.start(3600000)  # Check every hour
 
+        # Initialize translation windows dictionary before loading areas
+        self.translation_windows = {}
+        
         # Initialize UI
         self.init_ui()
         self.load_languages_from_config()
         self.load_saved_areas()
         self.update_button_states()
+        
+        # Ensure settings are enabled on startup (when no translation windows are running)
+        self.update_settings_state(True)
 
         self.text_processor = text_processor
-        self.translation_windows = {}
 
         # Check for updates after a short delay to ensure the window is fully loaded
         QTimer.singleShot(2000, self.check_for_updates)
@@ -306,138 +314,225 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.main_layout = QHBoxLayout(self.central_widget)
         self.main_layout.setContentsMargins(20, 20, 20, 20)
+        self.main_layout.setSpacing(15)
+
+        # Apply global styling for comboboxes and text boxes
+        widget_style = """
+            QComboBox {
+                padding: 4px 6px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                background-color: white;
+                min-height: 20px;
+            }
+            QComboBox:hover {
+                border: 1px solid #2196F3;
+            }
+            QComboBox:focus {
+                border: 2px solid #2196F3;
+            }
+            QComboBox::drop-down {
+                border: none;
+                padding-right: 8px;
+            }
+            QComboBox::down-arrow {
+                width: 12px;
+                height: 12px;
+            }
+            QComboBox QAbstractItemView {
+                padding: 4px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                selection-background-color: #e3f2fd;
+            }
+            QLineEdit {
+                padding: 4px 6px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                background-color: white;
+                min-height: 20px;
+            }
+            QLineEdit:hover {
+                border: 1px solid #2196F3;
+            }
+            QLineEdit:focus {
+                border: 2px solid #2196F3;
+                background-color: #fafafa;
+            }
+        """
+        self.setStyleSheet(widget_style)
 
         # Settings panel
-        self.settings_group = QGroupBox("Settings")
+        self.settings_group = QGroupBox("⚙️ Settings & Configuration")
         self.settings_group.setStyleSheet(
-            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: {self.frame_bg}; }}"
+            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: {self.frame_bg}; padding-top: 10px; }}"
+            f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; }}"
         )
         self.main_layout.addWidget(self.settings_group)
         self.settings_layout = QVBoxLayout(self.settings_group)
+        self.settings_layout.setSpacing(10)
+        self.settings_layout.setContentsMargins(10, 15, 10, 10)
 
         # Font settings
-        self.font_group = QGroupBox("Font Settings")
-        self.font_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.font_group = QGroupBox("📝 Text Display Settings")
+        self.font_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.font_group.setToolTip("Customize how translated text appears on screen")
         self.settings_layout.addWidget(self.font_group)
         self.font_layout = QHBoxLayout(self.font_group)
+        self.font_layout.setSpacing(8)
 
-        self.font_label = QLabel("Font:")
+        self.font_label = QLabel("Font Family:")
+        self.font_label.setToolTip("Choose the font for displaying translated text")
         self.font_layout.addWidget(self.font_label)
         self.font_combo = QComboBox()
         self.font_combo.addItems(["Google Sans", "Segoe UI", "Consolas", "Courier New", "Lucida Console", "Monospace"])
         self.font_combo.setCurrentText(self.config_manager.get_global_setting('font_family', 'Google Sans'))
+        self.font_combo.setToolTip("Select the font family for translated text. Changes apply immediately to active translations.")
         self.font_combo.currentTextChanged.connect(self.update_translation_settings)
         self.font_layout.addWidget(self.font_combo)
 
         self.size_label = QLabel("Size:")
+        self.size_label.setToolTip("Font size in pixels")
         self.font_layout.addWidget(self.size_label)
         self.font_size_edit = QLineEdit()
-        self.font_size_edit.setFixedWidth(40)
+        self.font_size_edit.setFixedWidth(50)
         self.font_size_edit.setText(self.config_manager.get_global_setting('font_size', '14'))
+        self.font_size_edit.setPlaceholderText("14")
+        self.font_size_edit.setToolTip("Enter font size (recommended: 12-20 pixels)")
         self.font_size_edit.textChanged.connect(self.update_translation_settings)
         self.font_layout.addWidget(self.font_size_edit)
 
         self.style_label = QLabel("Style:")
+        self.style_label.setToolTip("Text style: normal, bold, or italic")
         self.font_layout.addWidget(self.style_label)
         self.font_style_combo = QComboBox()
         self.font_style_combo.addItems(["normal", "bold", "italic"])
         self.font_style_combo.setCurrentText(self.config_manager.get_global_setting('font_style', 'normal'))
+        self.font_style_combo.setToolTip("Choose text style. Bold is recommended for better visibility.")
         self.font_style_combo.currentTextChanged.connect(self.update_translation_settings)
         self.font_layout.addWidget(self.font_style_combo)
 
         # Color settings
-        self.color_group = QGroupBox("Color Settings")
-        self.color_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.color_group = QGroupBox("🎨 Text Color Settings")
+        self.color_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.color_group.setToolTip("Set colors for character names and dialogue text")
         self.settings_layout.addWidget(self.color_group)
         self.color_layout = QHBoxLayout(self.color_group)
+        self.color_layout.setSpacing(8)
 
-        self.name_color_label = QLabel("Name Color:")
+        self.name_color_label = QLabel("Character Name:")
+        self.name_color_label.setToolTip("Color for character/speaker names")
         self.color_layout.addWidget(self.name_color_label)
-        self.name_color_button = QPushButton("Pick Color")
+        self.name_color_button = QPushButton("Choose Color")
+        self.name_color_button.setToolTip("Click to pick a color for character names")
         self.name_color_button.clicked.connect(lambda: self.pick_color('name_color'))
         self.color_layout.addWidget(self.name_color_button)
         self.name_color_preview = QLabel()
-        self.name_color_preview.setFixedSize(20, 20)
+        self.name_color_preview.setFixedSize(30, 25)
         self.name_color_value = self.config_manager.get_global_setting('name_color', '#00ffff')
-        self.name_color_preview.setStyleSheet(f"background-color: {self.name_color_value}; border: 1px solid black;")
+        self.name_color_preview.setStyleSheet(f"background-color: {self.name_color_value}; border: 2px solid #333; border-radius: 3px;")
+        self.name_color_preview.setToolTip(f"Current name color: {self.name_color_value}")
         self.color_layout.addWidget(self.name_color_preview)
 
-        self.dialogue_color_label = QLabel("Dialogue Color:")
+        self.dialogue_color_label = QLabel("Dialogue Text:")
+        self.dialogue_color_label.setToolTip("Color for dialogue/speech text")
         self.color_layout.addWidget(self.dialogue_color_label)
-        self.dialogue_color_button = QPushButton("Pick Color")
+        self.dialogue_color_button = QPushButton("Choose Color")
+        self.dialogue_color_button.setToolTip("Click to pick a color for dialogue text")
         self.dialogue_color_button.clicked.connect(lambda: self.pick_color('dialogue_color'))
         self.color_layout.addWidget(self.dialogue_color_button)
         self.dialogue_color_preview = QLabel()
-        self.dialogue_color_preview.setFixedSize(20, 20)
+        self.dialogue_color_preview.setFixedSize(30, 25)
         self.dialogue_color_value = self.config_manager.get_global_setting('dialogue_color', '#00ff00')
-        self.dialogue_color_preview.setStyleSheet(f"background-color: {self.dialogue_color_value}; border: 1px solid black;")
+        self.dialogue_color_preview.setStyleSheet(f"background-color: {self.dialogue_color_value}; border: 2px solid #333; border-radius: 3px;")
+        self.dialogue_color_preview.setToolTip(f"Current dialogue color: {self.dialogue_color_value}")
         self.color_layout.addWidget(self.dialogue_color_preview)
 
         # Background settings
-        self.bg_group = QGroupBox("Background Settings")
-        self.bg_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.bg_group = QGroupBox("🖼️ Window Background")
+        self.bg_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.bg_group.setToolTip("Customize the translation window background and transparency")
         self.settings_layout.addWidget(self.bg_group)
         self.bg_layout = QHBoxLayout(self.bg_group)
+        self.bg_layout.setSpacing(8)
 
         self.bg_color_label = QLabel("Background Color:")
+        self.bg_color_label.setToolTip("Color of the translation window background")
         self.bg_layout.addWidget(self.bg_color_label)
-        self.bg_color_button = QPushButton("Pick Color")
+        self.bg_color_button = QPushButton("Choose Color")
+        self.bg_color_button.setToolTip("Click to pick a background color for translation windows")
         self.bg_color_button.clicked.connect(self.pick_background_color)
         self.bg_layout.addWidget(self.bg_color_button)
         self.bg_color_preview = QLabel()
-        self.bg_color_preview.setFixedSize(20, 20)
+        self.bg_color_preview.setFixedSize(30, 25)
         self.bg_color_value = self.config_manager.get_background_color()
-        self.bg_color_preview.setStyleSheet(f"background-color: {self.bg_color_value}; border: 1px solid black;")
+        self.bg_color_preview.setStyleSheet(f"background-color: {self.bg_color_value}; border: 2px solid #333; border-radius: 3px;")
+        self.bg_color_preview.setToolTip(f"Current background color: {self.bg_color_value}")
         self.bg_layout.addWidget(self.bg_color_preview)
 
-        self.opacity_label = QLabel("Opacity:")
+        self.opacity_label = QLabel("Transparency:")
+        self.opacity_label.setToolTip("Window transparency (0.0 = fully transparent, 1.0 = fully opaque)")
         self.bg_layout.addWidget(self.opacity_label)
         self.opacity_edit = QLineEdit()
-        self.opacity_edit.setFixedWidth(40)
+        self.opacity_edit.setFixedWidth(50)
         self.opacity_edit.setText('0.85')
+        self.opacity_edit.setPlaceholderText("0.85")
+        self.opacity_edit.setToolTip("Enter opacity value between 0.1 and 1.0 (recommended: 0.7-0.9)")
         self.opacity_edit.textChanged.connect(self.update_opacity)
         self.bg_layout.addWidget(self.opacity_edit)
 
         # Language settings
-        self.language_group = QGroupBox("Language Settings")
-        self.language_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.language_group = QGroupBox("🌐 Translation Languages")
+        self.language_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.language_group.setToolTip("Select the source language (text to translate from) and target language (text to translate to)")
         self.settings_layout.addWidget(self.language_group)
         self.language_layout = QHBoxLayout(self.language_group)
+        self.language_layout.setSpacing(8)
 
-        self.source_lang_label = QLabel("Source Language:")
+        self.source_lang_label = QLabel("From:")
+        self.source_lang_label.setToolTip("The language of the text on screen (source language)")
         self.language_layout.addWidget(self.source_lang_label)
         self.source_lang_combo = QComboBox()
+        self.source_lang_combo.setToolTip("Select the language of the text you want to translate")
         self.language_layout.addWidget(self.source_lang_combo)
 
-        self.target_lang_label = QLabel("Target Language:")
+        self.target_lang_label = QLabel("To:")
+        self.target_lang_label.setToolTip("The language you want to translate to (target language)")
         self.language_layout.addWidget(self.target_lang_label)
         self.target_lang_combo = QComboBox()
+        self.target_lang_combo.setToolTip("Select the language you want translations displayed in")
         self.language_layout.addWidget(self.target_lang_combo)
 
         # Hotkey settings
-        self.hotkey_group = QGroupBox("Hotkey Settings")
-        self.hotkey_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.hotkey_group = QGroupBox("⌨️ Keyboard Shortcuts")
+        self.hotkey_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.hotkey_group.setToolTip("Configure keyboard shortcuts for quick actions")
         self.settings_layout.addWidget(self.hotkey_group)
         self.hotkey_layout = QVBoxLayout(self.hotkey_group)
+        self.hotkey_layout.setSpacing(8)
 
         # Toggle Hotkey row
         self.toggle_hotkey_layout = QHBoxLayout()
-        self.hotkey_label = QLabel("Toggle Hotkey:")
+        self.hotkey_label = QLabel("Pause/Resume Translation:")
+        self.hotkey_label.setToolTip("Hotkey to pause or resume translation in active windows")
         self.toggle_hotkey_layout.addWidget(self.hotkey_label)
         
         # Use custom HotkeyInput widget instead of combobox
         self.hotkey_input = HotkeyInput()
         self.hotkey_input.setText(self.config_manager.get_toggle_hotkey())
+        self.hotkey_input.setToolTip("Click here and press your desired key combination (e.g., Ctrl+1)")
         self.hotkey_input.textChanged.connect(self.on_hotkey_changed)
         self.toggle_hotkey_layout.addWidget(self.hotkey_input)
 
         self.hotkey_apply_button = QPushButton("Apply")
+        self.hotkey_apply_button.setToolTip("Click to save and activate the new hotkey")
         self.hotkey_apply_button.clicked.connect(self.update_hotkey_setting)
         self.hotkey_apply_button.setEnabled(False)
         self.toggle_hotkey_layout.addWidget(self.hotkey_apply_button)
 
-        self.hotkey_info_label = QLabel("(Click field and press keys)")
-        self.hotkey_info_label.setStyleSheet("color: #666666; font-size: 9pt;")
+        self.hotkey_info_label = QLabel("💡 Click field and press keys")
+        self.hotkey_info_label.setStyleSheet("color: #666666; font-size: 9pt; font-style: italic;")
+        self.hotkey_info_label.setToolTip("Instructions: Click the input field, then press your desired key combination")
         self.toggle_hotkey_layout.addWidget(self.hotkey_info_label)
         
         # Store the original hotkey for comparison
@@ -447,22 +542,26 @@ class MainWindow(QMainWindow):
 
         # Add Area hotkey settings (below Toggle Hotkey)
         self.add_area_hotkey_layout = QHBoxLayout()
-        self.add_area_hotkey_label = QLabel("Add Area Hotkey:")
+        self.add_area_hotkey_label = QLabel("Add New Area:")
+        self.add_area_hotkey_label.setToolTip("Hotkey to quickly add a new translation area")
         self.add_area_hotkey_layout.addWidget(self.add_area_hotkey_label)
         
         # Use custom HotkeyInput widget for add area hotkey
         self.add_area_hotkey_input = HotkeyInput()
         self.add_area_hotkey_input.setText(self.config_manager.get_add_area_hotkey())
+        self.add_area_hotkey_input.setToolTip("Click here and press your desired key combination (e.g., Ctrl+2)")
         self.add_area_hotkey_input.textChanged.connect(self.on_add_area_hotkey_changed)
         self.add_area_hotkey_layout.addWidget(self.add_area_hotkey_input)
 
         self.add_area_hotkey_apply_button = QPushButton("Apply")
+        self.add_area_hotkey_apply_button.setToolTip("Click to save and activate the new hotkey")
         self.add_area_hotkey_apply_button.clicked.connect(self.update_add_area_hotkey_setting)
         self.add_area_hotkey_apply_button.setEnabled(False)
         self.add_area_hotkey_layout.addWidget(self.add_area_hotkey_apply_button)
 
-        self.add_area_hotkey_info_label = QLabel("(Click field and press keys)")
-        self.add_area_hotkey_info_label.setStyleSheet("color: #666666; font-size: 9pt;")
+        self.add_area_hotkey_info_label = QLabel("💡 Click field and press keys")
+        self.add_area_hotkey_info_label.setStyleSheet("color: #666666; font-size: 9pt; font-style: italic;")
+        self.add_area_hotkey_info_label.setToolTip("Instructions: Click the input field, then press your desired key combination")
         self.add_area_hotkey_layout.addWidget(self.add_area_hotkey_info_label)
         
         # Store the original add area hotkey for comparison
@@ -471,13 +570,16 @@ class MainWindow(QMainWindow):
         self.hotkey_layout.addLayout(self.add_area_hotkey_layout)
 
         # Auto-pause settings
-        self.auto_pause_group = QGroupBox("Auto-Pause Settings")
-        self.auto_pause_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.auto_pause_group = QGroupBox("⏸️ Smart Pause (Resource Saving)")
+        self.auto_pause_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.auto_pause_group.setToolTip("Automatically pause translation when no text is detected to save resources")
         self.settings_layout.addWidget(self.auto_pause_group)
         self.auto_pause_layout = QHBoxLayout(self.auto_pause_group)
+        self.auto_pause_layout.setSpacing(8)
 
-        self.auto_pause_checkbox = QCheckBox("Pause translation after")
+        self.auto_pause_checkbox = QCheckBox("Auto-pause after")
         self.auto_pause_checkbox.setChecked(self.config_manager.get_auto_pause_enabled())
+        self.auto_pause_checkbox.setToolTip("Enable automatic pausing when no text is detected")
         self.auto_pause_checkbox.stateChanged.connect(self.update_auto_pause_settings)
         self.auto_pause_layout.addWidget(self.auto_pause_checkbox)
 
@@ -486,28 +588,35 @@ class MainWindow(QMainWindow):
         self.auto_pause_threshold_spinbox.setMaximum(100)
         self.auto_pause_threshold_spinbox.setValue(self.config_manager.get_auto_pause_threshold())
         self.auto_pause_threshold_spinbox.setFixedWidth(60)
+        self.auto_pause_threshold_spinbox.setToolTip("Number of empty captures before auto-pausing (recommended: 5-10)")
         self.auto_pause_threshold_spinbox.valueChanged.connect(self.update_auto_pause_settings)
         self.auto_pause_layout.addWidget(self.auto_pause_threshold_spinbox)
 
-        self.auto_pause_label = QLabel("captures without text")
+        self.auto_pause_label = QLabel("empty captures")
+        self.auto_pause_label.setToolTip("Translation will pause after this many captures with no text detected")
         self.auto_pause_layout.addWidget(self.auto_pause_label)
 
-        self.auto_pause_info_label = QLabel("(Saves API calls / CPU resources)")
-        self.auto_pause_info_label.setStyleSheet("color: #666666; font-size: 9pt;")
+        self.auto_pause_info_label = QLabel("💡 Saves resources")
+        self.auto_pause_info_label.setStyleSheet("color: #666666; font-size: 9pt; font-style: italic;")
         self.auto_pause_info_label.setToolTip("Saves API calls in Google Cloud mode, saves CPU resources in Local mode")
         self.auto_pause_layout.addWidget(self.auto_pause_info_label)
         self.auto_pause_layout.addStretch()
 
         # Translation mode settings
-        self.translation_mode_group = QGroupBox("Translation Mode")
-        self.translation_mode_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.translation_mode_group = QGroupBox("⚙️ Translation Service")
+        self.translation_mode_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.translation_mode_group.setToolTip("Choose your translation service: Google Cloud (paid), Local (free, requires LM Studio), or LibreTranslate (free, self-hosted)")
         self.settings_layout.addWidget(self.translation_mode_group)
         self.translation_mode_layout = QVBoxLayout(self.translation_mode_group)
+        self.translation_mode_layout.setSpacing(8)
 
-        self.mode_label = QLabel("Mode:")
-        self.translation_mode_layout.addWidget(self.mode_label)
+        # Mode label and combobox in horizontal layout (inline)
+        self.mode_layout = QHBoxLayout()
+        self.mode_label = QLabel("Service:")
+        self.mode_label.setToolTip("Select the translation service to use")
+        self.mode_layout.addWidget(self.mode_label)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Google Cloud", "Local(Tesseract + LM Studio)", "LibreTranslate(Tesseract + LibreTranslate)"])
+        self.mode_combo.addItems(["Google Cloud", "Local (Tesseract + LM Studio)", "LibreTranslate (Tesseract + LibreTranslate)"])
         current_mode = self.config_manager.get_translation_mode()
         if current_mode == 'google':
             mode_index = 0
@@ -516,21 +625,29 @@ class MainWindow(QMainWindow):
         else:  # libretranslate
             mode_index = 2
         self.mode_combo.setCurrentIndex(mode_index)
+        self.mode_combo.setToolTip("Google Cloud: Paid, high quality\nLocal: Free, requires LM Studio running\nLibreTranslate: Free, requires LibreTranslate server")
         self.mode_combo.currentIndexChanged.connect(self.on_translation_mode_changed)
-        self.translation_mode_layout.addWidget(self.mode_combo)
+        self.mode_layout.addWidget(self.mode_combo)
+        self.mode_layout.addStretch()  # Add stretch to align left
+        self.translation_mode_layout.addLayout(self.mode_layout)
 
         # LLM Studio settings (shown only when local mode is selected)
-        self.llm_studio_group = QGroupBox("LLM Studio Settings")
-        self.llm_studio_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.llm_studio_group = QGroupBox("🤖 LM Studio Configuration")
+        self.llm_studio_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.llm_studio_group.setToolTip("Configure LM Studio API connection for local translation")
         self.translation_mode_layout.addWidget(self.llm_studio_group)
         self.llm_studio_layout = QVBoxLayout(self.llm_studio_group)
+        self.llm_studio_layout.setSpacing(8)
 
         # API URL setting
         self.llm_studio_url_layout = QHBoxLayout()
         self.llm_studio_url_label = QLabel("API URL:")
+        self.llm_studio_url_label.setToolTip("LM Studio API endpoint URL")
         self.llm_studio_url_layout.addWidget(self.llm_studio_url_label)
         self.llm_studio_edit = QLineEdit()
         self.llm_studio_edit.setText(self.config_manager.get_llm_studio_url())
+        self.llm_studio_edit.setPlaceholderText("http://localhost:1234/v1")
+        self.llm_studio_edit.setToolTip("Enter LM Studio API URL (default: http://localhost:1234/v1)\nMake sure LM Studio is running with API enabled")
         self.llm_studio_edit.textChanged.connect(self.on_llm_studio_url_changed)
         self.llm_studio_url_layout.addWidget(self.llm_studio_edit)
         self.llm_studio_layout.addLayout(self.llm_studio_url_layout)
@@ -538,22 +655,26 @@ class MainWindow(QMainWindow):
         # Model name setting
         self.llm_studio_model_layout = QHBoxLayout()
         self.llm_studio_model_label = QLabel("Model Name:")
+        self.llm_studio_model_label.setToolTip("Specific model to use (optional)")
         self.llm_studio_model_layout.addWidget(self.llm_studio_model_label)
         self.llm_studio_model_edit = QLineEdit()
         self.llm_studio_model_edit.setPlaceholderText("Leave empty for auto-detect")
         self.llm_studio_model_edit.setText(self.config_manager.get_llm_studio_model())
+        self.llm_studio_model_edit.setToolTip("Enter a specific model name, or leave empty to auto-detect from LM Studio")
         self.llm_studio_model_edit.textChanged.connect(self.on_llm_studio_model_changed)
         self.llm_studio_model_layout.addWidget(self.llm_studio_model_edit)
         self.llm_studio_layout.addLayout(self.llm_studio_model_layout)
 
         # OCR mode setting
         self.ocr_mode_layout = QHBoxLayout()
-        self.ocr_mode_label = QLabel("OCR Mode:")
+        self.ocr_mode_label = QLabel("Text Detection (OCR):")
+        self.ocr_mode_label.setToolTip("OCR engine for detecting text from screen")
         self.ocr_mode_layout.addWidget(self.ocr_mode_label)
         self.ocr_mode_combo = QComboBox()
         self.ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR"])
         current_ocr_mode = self.config_manager.get_ocr_mode()
         self.ocr_mode_combo.setCurrentIndex(0 if current_ocr_mode == 'tesseract' else 1)
+        self.ocr_mode_combo.setToolTip("Tesseract: Free, widely available\nPaddleOCR: Better accuracy, requires installation")
         self.ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_mode_changed)
         self.ocr_mode_layout.addWidget(self.ocr_mode_combo)
         self.llm_studio_layout.addLayout(self.ocr_mode_layout)
@@ -561,53 +682,63 @@ class MainWindow(QMainWindow):
         # Tesseract path setting
         self.tesseract_path_layout = QHBoxLayout()
         self.tesseract_path_label = QLabel("Tesseract Path:")
+        self.tesseract_path_label.setToolTip("Path to tesseract.exe (leave empty if Tesseract is in system PATH)")
         self.tesseract_path_layout.addWidget(self.tesseract_path_label)
         self.tesseract_path_edit = QLineEdit()
         self.tesseract_path_edit.setPlaceholderText("Leave empty to use system PATH")
         self.tesseract_path_edit.setText(self.config_manager.get_tesseract_path())
+        self.tesseract_path_edit.setToolTip("Enter full path to tesseract.exe, or leave empty if Tesseract is installed and in your system PATH")
         self.tesseract_path_edit.textChanged.connect(self.on_tesseract_path_changed)
         self.tesseract_path_layout.addWidget(self.tesseract_path_edit)
-        self.tesseract_browse_button = QPushButton("Browse")
+        self.tesseract_browse_button = QPushButton("Browse...")
+        self.tesseract_browse_button.setToolTip("Browse for tesseract.exe file")
         self.tesseract_browse_button.clicked.connect(self.browse_tesseract_path)
         self.tesseract_path_layout.addWidget(self.tesseract_browse_button)
         
         self.tesseract_test_button = QPushButton("Test")
+        self.tesseract_test_button.setToolTip("Test if Tesseract is installed and working correctly")
         self.tesseract_test_button.clicked.connect(self.test_tesseract)
-        self.tesseract_test_button.setToolTip("Test if Tesseract is working correctly")
         self.tesseract_path_layout.addWidget(self.tesseract_test_button)
         self.llm_studio_layout.addLayout(self.tesseract_path_layout)
 
         # LibreTranslate settings (shown only when libretranslate mode is selected)
-        self.libretranslate_group = QGroupBox("LibreTranslate Settings")
-        self.libretranslate_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.libretranslate_group = QGroupBox("🌍 LibreTranslate Configuration")
+        self.libretranslate_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.libretranslate_group.setToolTip("Configure LibreTranslate API connection (free, open-source translation service)")
         self.translation_mode_layout.addWidget(self.libretranslate_group)
         self.libretranslate_layout = QVBoxLayout(self.libretranslate_group)
+        self.libretranslate_layout.setSpacing(8)
 
         # API URL setting
         self.libretranslate_url_layout = QHBoxLayout()
         self.libretranslate_url_label = QLabel("API URL:")
+        self.libretranslate_url_label.setToolTip("LibreTranslate server API endpoint")
         self.libretranslate_url_layout.addWidget(self.libretranslate_url_label)
         self.libretranslate_edit = QLineEdit()
         self.libretranslate_edit.setText(self.config_manager.get_libretranslate_url())
+        self.libretranslate_edit.setPlaceholderText("http://localhost:5000")
+        self.libretranslate_edit.setToolTip("Enter LibreTranslate API URL (default: http://localhost:5000)\nMake sure LibreTranslate server is running")
         self.libretranslate_edit.textChanged.connect(self.on_libretranslate_url_changed)
         self.libretranslate_url_layout.addWidget(self.libretranslate_edit)
         
         # Test connection button (inline with API URL)
         self.libretranslate_test_button = QPushButton("Test Connection")
+        self.libretranslate_test_button.setToolTip("Test if LibreTranslate API is accessible and working")
         self.libretranslate_test_button.clicked.connect(self.test_libretranslate)
-        self.libretranslate_test_button.setToolTip("Test if LibreTranslate API is accessible")
         self.libretranslate_url_layout.addWidget(self.libretranslate_test_button)
         
         self.libretranslate_layout.addLayout(self.libretranslate_url_layout)
 
         # OCR mode setting for LibreTranslate
         self.libretranslate_ocr_mode_layout = QHBoxLayout()
-        self.libretranslate_ocr_mode_label = QLabel("OCR Mode:")
+        self.libretranslate_ocr_mode_label = QLabel("Text Detection (OCR):")
+        self.libretranslate_ocr_mode_label.setToolTip("OCR engine for detecting text from screen")
         self.libretranslate_ocr_mode_layout.addWidget(self.libretranslate_ocr_mode_label)
         self.libretranslate_ocr_mode_combo = QComboBox()
         self.libretranslate_ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR"])
         current_ocr_mode = self.config_manager.get_ocr_mode()
         self.libretranslate_ocr_mode_combo.setCurrentIndex(0 if current_ocr_mode == 'tesseract' else 1)
+        self.libretranslate_ocr_mode_combo.setToolTip("Tesseract: Free, widely available\nPaddleOCR: Better accuracy, requires installation")
         self.libretranslate_ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_mode_changed)
         self.libretranslate_ocr_mode_layout.addWidget(self.libretranslate_ocr_mode_combo)
         self.libretranslate_layout.addLayout(self.libretranslate_ocr_mode_layout)
@@ -615,74 +746,84 @@ class MainWindow(QMainWindow):
         # Tesseract path setting for LibreTranslate
         self.libretranslate_tesseract_path_layout = QHBoxLayout()
         self.libretranslate_tesseract_path_label = QLabel("Tesseract Path:")
+        self.libretranslate_tesseract_path_label.setToolTip("Path to tesseract.exe (leave empty if Tesseract is in system PATH)")
         self.libretranslate_tesseract_path_layout.addWidget(self.libretranslate_tesseract_path_label)
         self.libretranslate_tesseract_path_edit = QLineEdit()
         self.libretranslate_tesseract_path_edit.setPlaceholderText("Leave empty to use system PATH")
         self.libretranslate_tesseract_path_edit.setText(self.config_manager.get_tesseract_path())
+        self.libretranslate_tesseract_path_edit.setToolTip("Enter full path to tesseract.exe, or leave empty if Tesseract is installed and in your system PATH")
         self.libretranslate_tesseract_path_edit.textChanged.connect(self.on_tesseract_path_changed)
         self.libretranslate_tesseract_path_layout.addWidget(self.libretranslate_tesseract_path_edit)
-        self.libretranslate_tesseract_browse_button = QPushButton("Browse")
+        self.libretranslate_tesseract_browse_button = QPushButton("Browse...")
+        self.libretranslate_tesseract_browse_button.setToolTip("Browse for tesseract.exe file")
         self.libretranslate_tesseract_browse_button.clicked.connect(self.browse_tesseract_path)
         self.libretranslate_tesseract_path_layout.addWidget(self.libretranslate_tesseract_browse_button)
         
         self.libretranslate_tesseract_test_button = QPushButton("Test")
+        self.libretranslate_tesseract_test_button.setToolTip("Test if Tesseract is installed and working correctly")
         self.libretranslate_tesseract_test_button.clicked.connect(self.test_tesseract)
-        self.libretranslate_tesseract_test_button.setToolTip("Test if Tesseract is working correctly")
         self.libretranslate_tesseract_path_layout.addWidget(self.libretranslate_tesseract_test_button)
         self.libretranslate_layout.addLayout(self.libretranslate_tesseract_path_layout)
 
         # Credentials settings
-        self.credentials_group = QGroupBox("Google Cloud Settings")
-        self.credentials_group.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.credentials_group = QGroupBox("☁️ Google Cloud Credentials")
+        self.credentials_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.credentials_group.setToolTip("Configure Google Cloud Translation API credentials (JSON file)")
         self.settings_layout.addWidget(self.credentials_group)
         self.credentials_layout = QHBoxLayout(self.credentials_group)
+        self.credentials_layout.setSpacing(8)
 
-        self.credentials_label = QLabel("Credentials Path:")
+        self.credentials_label = QLabel("Credentials File:")
+        self.credentials_label.setToolTip("Path to Google Cloud service account JSON file")
         self.credentials_layout.addWidget(self.credentials_label)
         self.credentials_edit = QLineEdit()
         self.credentials_edit.setText(self.config_manager.get_credentials_path())
+        self.credentials_edit.setPlaceholderText("Select Google Cloud credentials JSON file...")
+        self.credentials_edit.setToolTip("Path to your Google Cloud service account JSON credentials file\nYou can download this from Google Cloud Console")
         self.credentials_layout.addWidget(self.credentials_edit)
-        self.browse_button = QPushButton("Browse")
+        self.browse_button = QPushButton("Browse...")
+        self.browse_button.setToolTip("Browse for Google Cloud credentials JSON file")
         self.browse_button.clicked.connect(self.browse_credentials)
         self.credentials_layout.addWidget(self.browse_button)
 
         # Translation areas panel
-        self.areas_group = QGroupBox("Translation Areas")
+        self.areas_group = QGroupBox("📍 Translation Areas")
         self.areas_group.setStyleSheet(
-            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: {self.frame_bg}; }}"
+            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: {self.frame_bg}; padding-top: 10px; }}"
+            f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; }}"
         )
+        self.areas_group.setToolTip("Manage your translation areas. Each area monitors a specific screen region for text to translate.")
         self.main_layout.addWidget(self.areas_group)
         self.areas_layout = QVBoxLayout(self.areas_group)
+        self.areas_layout.setSpacing(10)
+        self.areas_layout.setContentsMargins(10, 15, 10, 10)
 
         self.areas_tree = QTreeWidget()
-        self.areas_tree.setHeaderLabels(["Name", "Position", "Size"])
+        self.areas_tree.setHeaderLabels(["Name", "Position", "Size", "Action"])
         self.areas_tree.setStyleSheet(f"background-color: {self.frame_bg};")
+        self.areas_tree.setColumnWidth(3, 80)  # Set Action column width for icon buttons (Start/Stop + Delete)
+        self.areas_tree.setToolTip("List of all translation areas. Use ▶ to start/stop translation, ✕ to delete.")
         self.areas_layout.addWidget(self.areas_tree)
 
         self.buttons_layout = QHBoxLayout()
         self.areas_layout.addLayout(self.buttons_layout)
 
-        self.add_button = QPushButton("Add")
+        self.add_button = QPushButton("➕ Add New Area")
+        self.add_button.setToolTip("Add a new translation area by selecting a region on your screen\nYou can also use the 'Add Area' hotkey for quick access")
         self.add_button.clicked.connect(self.add_area)
         self.buttons_layout.addWidget(self.add_button)
 
-        self.delete_button = QPushButton("Delete")
-        self.delete_button.clicked.connect(self.delete_area)
-        self.buttons_layout.addWidget(self.delete_button)
-
-        self.start_button = QPushButton("Run")
-        self.start_button.clicked.connect(self.start_translation)
-        self.buttons_layout.addWidget(self.start_button)
-
         # Styling buttons
-        for btn in [self.add_button, self.delete_button, self.start_button, self.browse_button,
+        for btn in [self.add_button, self.browse_button,
                     self.name_color_button, self.dialogue_color_button, self.bg_color_button, 
-                    self.hotkey_apply_button, self.tesseract_browse_button, self.tesseract_test_button,
+                    self.hotkey_apply_button, self.add_area_hotkey_apply_button,
+                    self.tesseract_browse_button, self.tesseract_test_button,
                     self.libretranslate_test_button, self.libretranslate_tesseract_browse_button,
                     self.libretranslate_tesseract_test_button]:
             btn.setStyleSheet(
-                f"QPushButton {{ background-color: {self.button_bg}; color: {self.button_fg}; padding: 5px; }}"
+                f"QPushButton {{ background-color: {self.button_bg}; color: {self.button_fg}; padding: 6px 12px; border-radius: 4px; font-weight: 500; }}"
                 f"QPushButton:hover {{ background-color: {self.secondary_color}; }}"
+                f"QPushButton:disabled {{ background-color: #cccccc; color: #666666; }}"
             )
         
         # Show/hide credentials group based on mode
@@ -709,15 +850,186 @@ class MainWindow(QMainWindow):
                     item = QTreeWidgetItem([
                         f"Area {area_id}",
                         f"X: {area_data['x']}, Y: {area_data['y']}",
-                        f"W: {area_data['width']}, H: {area_data['height']}"
+                        f"W: {area_data['width']}, H: {area_data['height']}",
+                        ""  # Empty for Action column, will be filled with button
                     ])
                     item.setData(0, Qt.UserRole, area_id)
                     self.areas_tree.addTopLevelItem(item)
+                    # Add action button for this area
+                    self._add_action_button(item, area_id)
             self.area_selected = self.areas_tree.topLevelItemCount() > 0
             self.update_button_states()
             logger.info("Areas loaded successfully")
         except Exception as e:
             logger.error(f"Error loading saved areas: {str(e)}", exc_info=True)
+
+    def _add_action_button(self, item: QTreeWidgetItem, area_id: str):
+        """Add Start/Stop and Delete buttons to the Action column for a tree item."""
+        # Check if translation is running for this area
+        is_running = False
+        if hasattr(self, 'translation_windows') and area_id in self.translation_windows:
+            window = self.translation_windows[area_id]
+            is_running = window.isVisible() and \
+                        hasattr(window, 'is_capturing') and \
+                        window.is_capturing
+        
+        # Create container widget for action buttons
+        action_container = QWidget()
+        action_layout = QHBoxLayout(action_container)
+        action_layout.setContentsMargins(2, 0, 2, 0)
+        action_layout.setSpacing(3)
+        
+        # Create Start/Stop button with icon
+        start_stop_button = QPushButton("⏸" if is_running else "▶")
+        start_stop_button.setFixedSize(28, 25)
+        start_stop_button.setToolTip("Stop" if is_running else "Start")
+        
+        # Style the Start/Stop button
+        if is_running:
+            start_stop_button.setStyleSheet(
+                f"QPushButton {{ background-color: #f44336; color: white; padding: 3px; border-radius: 3px; font-size: 14px; }}"
+                f"QPushButton:hover {{ background-color: #d32f2f; }}"
+            )
+        else:
+            start_stop_button.setStyleSheet(
+                f"QPushButton {{ background-color: {self.button_bg}; color: {self.button_fg}; padding: 3px; border-radius: 3px; font-size: 14px; }}"
+                f"QPushButton:hover {{ background-color: {self.secondary_color}; }}"
+            )
+        
+        # Connect Start/Stop button to toggle action
+        start_stop_button.clicked.connect(lambda checked, aid=area_id: self._toggle_area_translation(aid))
+        action_layout.addWidget(start_stop_button)
+        
+        # Create Delete button with icon
+        delete_button = QPushButton("✕")
+        delete_button.setFixedSize(28, 25)
+        delete_button.setToolTip("Delete")
+        delete_button.setStyleSheet(
+            f"QPushButton {{ background-color: #f44336; color: white; padding: 3px; border-radius: 3px; font-size: 14px; }}"
+            f"QPushButton:hover {{ background-color: #d32f2f; }}"
+        )
+        
+        # Connect Delete button to delete action
+        delete_button.clicked.connect(lambda checked, aid=area_id: self._delete_area_by_id(aid))
+        action_layout.addWidget(delete_button)
+        
+        # Add stretch to align buttons to the left
+        action_layout.addStretch()
+        
+        # Set container widget in the Action column (column 3)
+        self.areas_tree.setItemWidget(item, 3, action_container)
+        
+        # Store button references in item data
+        item.setData(3, Qt.UserRole, {'start_stop': start_stop_button, 'delete': delete_button, 'container': action_container})
+
+    def _update_action_button(self, area_id: str, running: bool):
+        """Update the action button state for a specific area."""
+        # Find the tree item for this area
+        for i in range(self.areas_tree.topLevelItemCount()):
+            item = self.areas_tree.topLevelItem(i)
+            if item.data(0, Qt.UserRole) == area_id:
+                # Get button container or create it
+                container = self.areas_tree.itemWidget(item, 3)
+                if container is None:
+                    # Container doesn't exist, create it
+                    self._add_action_button(item, area_id)
+                    container = self.areas_tree.itemWidget(item, 3)
+                
+                if container:
+                    # Get button references from item data or container
+                    button_data = item.data(3, Qt.UserRole)
+                    if button_data and isinstance(button_data, dict):
+                        start_stop_button = button_data.get('start_stop')
+                    else:
+                        # Fallback: find button in container layout
+                        layout = container.layout()
+                        if layout and layout.count() > 0:
+                            start_stop_button = layout.itemAt(0).widget()
+                        else:
+                            start_stop_button = None
+                    
+                    if start_stop_button:
+                        # Update Start/Stop button icon and style
+                        start_stop_button.setText("⏸" if running else "▶")
+                        start_stop_button.setToolTip("Stop" if running else "Start")
+                        if running:
+                            start_stop_button.setStyleSheet(
+                                f"QPushButton {{ background-color: #f44336; color: white; padding: 3px; border-radius: 3px; font-size: 14px; }}"
+                                f"QPushButton:hover {{ background-color: #d32f2f; }}"
+                            )
+                        else:
+                            start_stop_button.setStyleSheet(
+                                f"QPushButton {{ background-color: {self.button_bg}; color: {self.button_fg}; padding: 3px; border-radius: 3px; font-size: 14px; }}"
+                                f"QPushButton:hover {{ background-color: {self.secondary_color}; }}"
+                            )
+                break
+
+    def _has_running_translation_windows(self) -> bool:
+        """Check if any translation windows are currently running (visible and capturing)."""
+        if not hasattr(self, 'translation_windows') or not self.translation_windows:
+            return False
+        for area_id, window in self.translation_windows.items():
+            if window.isVisible() and hasattr(window, 'is_capturing') and window.is_capturing:
+                return True
+        return False
+
+    def _toggle_area_translation(self, area_id: str):
+        """Toggle translation for a specific area (start or stop)."""
+        # Check if translation is currently running
+        is_running = False
+        if hasattr(self, 'translation_windows') and area_id in self.translation_windows:
+            window = self.translation_windows[area_id]
+            is_running = window.isVisible() and \
+                        hasattr(window, 'is_capturing') and \
+                        window.is_capturing
+        
+        if is_running:
+            # Stop translation
+            self._stop_area_translation(area_id)
+        else:
+            # Start translation
+            self._start_area_translation(area_id)
+
+    def _start_area_translation(self, area_id: str):
+        """Start translation for a specific area by ID."""
+        # Find the tree item for this area
+        for i in range(self.areas_tree.topLevelItemCount()):
+            item = self.areas_tree.topLevelItem(i)
+            if item.data(0, Qt.UserRole) == area_id:
+                # Select the item temporarily
+                self.areas_tree.setCurrentItem(item)
+                # Start translation using existing method
+                self.start_translation()
+                break
+
+    def _stop_area_translation(self, area_id: str):
+        """Stop translation for a specific area by ID."""
+        try:
+            if area_id in self.translation_windows:
+                window = self.translation_windows[area_id]
+                # Stop capturing
+                if hasattr(window, 'is_capturing'):
+                    window.is_capturing = False
+                if hasattr(window, 'toggle_capture'):
+                    window.toggle_capture()
+                # Stop the timer
+                if hasattr(window, 'timer') and window.timer:
+                    window.timer.stop()
+                # Hide the window
+                window.hide()
+                
+                # Update action button
+                self._update_action_button(area_id, running=False)
+                
+                logger.info(f"Stopped translation for area {area_id}")
+            
+            # Check if any translation windows are still running
+            # If none are running, re-enable settings
+            if not self._has_running_translation_windows():
+                logger.info("No translation windows are running, re-enabling settings")
+                self.update_settings_state(True)
+        except Exception as e:
+            logger.error(f"Error stopping translation for area {area_id}: {str(e)}", exc_info=True)
 
     def add_area(self):
         """Add a new translation area."""
@@ -740,10 +1052,13 @@ class MainWindow(QMainWindow):
             item = QTreeWidgetItem([
                 f"Area {area_id}",
                 f"X: {x}, Y: {y}",
-                f"W: {w}, H: {h}"
+                f"W: {w}, H: {h}",
+                ""  # Empty for Action column, will be filled with button
             ])
             item.setData(0, Qt.UserRole, area_id)
             self.areas_tree.addTopLevelItem(item)
+            # Add action button for this area
+            self._add_action_button(item, area_id)
             self.save_area_config(area_id, x, y, w, h)
             self.area_selected = True
             self.update_button_states()
@@ -754,51 +1069,54 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(100, self.start_translation)
         self.show()
 
-    def delete_area(self):
-        """Delete a selected area."""
-        selected = self.areas_tree.selectedItems()
-        if selected:
-            area_id = selected[0].data(0, Qt.UserRole)
-            try:
-                # First check if translation window exists and is running
-                window = self.translation_windows.get(area_id)
-                if window is not None:
-                    if window.isVisible():
-                        # Stop the translation process
-                        window.running = False
-                        window.timer.stop()
-                        
-                        # Wait a short moment to ensure cleanup
-                        QApplication.processEvents()
-                        
-                        # Close the window
-                        window.close()
-                        
-                        # Wait a short moment to ensure window is closed
-                        QApplication.processEvents()
+    def _delete_area_by_id(self, area_id: str):
+        """Delete an area by its ID."""
+        try:
+            # First check if translation window exists and is running
+            window = self.translation_windows.get(area_id)
+            if window is not None:
+                if window.isVisible():
+                    # Stop the translation process
+                    window.running = False
+                    window.timer.stop()
                     
-                    # Remove from translation windows dictionary
-                    self.translation_windows.pop(area_id, None)
-                
-                # Then remove from tree and config
-                index = self.areas_tree.indexOfTopLevelItem(selected[0])
-                self.areas_tree.takeTopLevelItem(index)
-                self.remove_area_from_config(area_id)
-                
-                # Update area selection state
-                self.area_selected = self.areas_tree.topLevelItemCount() > 0
-                self.update_button_states()
-                
-                # If no more translation windows are open, re-enable settings
-                if not self.translation_windows:
-                    try:
-                        self.update_settings_state(True)
-                    except Exception as e:
-                        logger.error(f"Error updating settings state after deletion: {e}")
+                    # Wait a short moment to ensure cleanup
+                    QApplication.processEvents()
                     
-            except Exception as e:
-                logger.error(f"Error deleting area {area_id}: {str(e)}", exc_info=True)
-                show_error_message(self, "Error", f"Failed to delete area {area_id}: {str(e)}")
+                    # Close the window
+                    window.close()
+                    
+                    # Wait a short moment to ensure window is closed
+                    QApplication.processEvents()
+                
+                # Remove from translation windows dictionary
+                self.translation_windows.pop(area_id, None)
+            
+            # Find and remove from tree
+            for i in range(self.areas_tree.topLevelItemCount()):
+                item = self.areas_tree.topLevelItem(i)
+                if item.data(0, Qt.UserRole) == area_id:
+                    index = self.areas_tree.indexOfTopLevelItem(item)
+                    self.areas_tree.takeTopLevelItem(index)
+                    break
+            
+            # Remove from config
+            self.remove_area_from_config(area_id)
+            
+            # Update area selection state
+            self.area_selected = self.areas_tree.topLevelItemCount() > 0
+            self.update_button_states()
+            
+            # If no more translation windows are running, re-enable settings
+            if not self._has_running_translation_windows():
+                try:
+                    self.update_settings_state(True)
+                except Exception as e:
+                    logger.error(f"Error updating settings state after deletion: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error deleting area {area_id}: {str(e)}", exc_info=True)
+            show_error_message(self, "Error", f"Failed to delete area {area_id}: {str(e)}")
 
     def save_area_config(self, area_id, x, y, w, h):
         """Save area configuration."""
@@ -889,6 +1207,9 @@ class MainWindow(QMainWindow):
             # Disable settings when translation window is opened
             self.update_settings_state(False)
             
+            # Update action button state to show "Stop"
+            self._update_action_button(area_id, running=True)
+            
             logger.info("Translation window created and shown")
         except Exception as e:
             logger.error(f"Error in start_translation: {str(e)}", exc_info=True)
@@ -908,15 +1229,18 @@ class MainWindow(QMainWindow):
                     window.timer.stop()
                 del self.translation_windows[area_id]
                 logger.info(f"Removed translation window for area_id: {area_id}")
+                
+                # Update action button to show "Start"
+                self._update_action_button(area_id, running=False)
             
             logger.info(f"Translation windows after removal: {list(self.translation_windows.keys())}")
             
-            # If no more translation windows are open, re-enable settings
-            if not self.translation_windows:
-                logger.info("No more translation windows, re-enabling settings")
+            # If no more translation windows are running, re-enable settings
+            if not self._has_running_translation_windows():
+                logger.info("No translation windows are running, re-enabling settings")
                 self.update_settings_state(enabled=True)  # Explicitly pass True
             else:
-                logger.info(f"Still have {len(self.translation_windows)} translation windows open")
+                logger.info(f"Still have running translation windows")
             
         except Exception as e:
             logger.error(f"Error handling translation window close: {str(e)}", exc_info=True)
@@ -990,8 +1314,8 @@ class MainWindow(QMainWindow):
 
     def update_button_states(self):
         """Update button states based on area selection."""
-        self.delete_button.setEnabled(self.area_selected)
-        self.start_button.setEnabled(self.area_selected)
+        # Note: Start/Stop and Delete buttons are now in Action column for each area
+        pass
 
     def update_settings_state(self, enabled: bool):
         """Enable or disable all settings controls."""
@@ -1086,18 +1410,17 @@ class MainWindow(QMainWindow):
             # Area management buttons - always enabled
             if hasattr(self, 'add_button'):
                 self.add_button.setEnabled(True)
-            if hasattr(self, 'delete_button'):
-                self.delete_button.setEnabled(self.area_selected)
-            if hasattr(self, 'start_button'):
-                self.start_button.setEnabled(self.area_selected)
+            # Note: Start/Stop and Delete buttons are now in Action column for each area
 
-            # Update button styles
+            # Update button styles - match the style from initial button styling
             disabled_style = """
                 QPushButton {
                     background-color: #cccccc;
                     color: #666666;
                     border: 1px solid #999999;
-                    padding: 5px;
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                    font-weight: 500;
                     opacity: 0.7;
                 }
                 QPushButton:hover {
@@ -1108,16 +1431,23 @@ class MainWindow(QMainWindow):
                 QPushButton {{
                     background-color: {self.button_bg};
                     color: {self.button_fg};
-                    padding: 5px;
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                    font-weight: 500;
                 }}
                 QPushButton:hover {{
                     background-color: {self.secondary_color};
                 }}
+                QPushButton:disabled {{
+                    background-color: #cccccc;
+                    color: #666666;
+                }}
             """
 
-            # Apply styles to color, browse, and hotkey apply buttons
+            # Apply styles to color, browse, and hotkey apply buttons - match Test Connection button style
             for btn in [self.name_color_button, self.dialogue_color_button, 
-                       self.bg_color_button, self.browse_button, self.hotkey_apply_button]:
+                       self.bg_color_button, self.browse_button, 
+                       self.hotkey_apply_button, self.add_area_hotkey_apply_button]:
                 if btn is not None:
                     btn.setStyleSheet(disabled_style if not enabled else enabled_style)
         except Exception as e:
