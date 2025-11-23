@@ -1033,41 +1033,47 @@ class MainWindow(QMainWindow):
 
     def add_area(self):
         """Add a new translation area."""
-        self.hide()
-        screenshot, region = capture_screen_region()
-        if region:
-            x, y, w, h = region
-            # Get existing area IDs
-            existing_ids = set()
-            for i in range(self.areas_tree.topLevelItemCount()):
-                item = self.areas_tree.topLevelItem(i)
-                existing_ids.add(int(item.data(0, Qt.UserRole)))
-            
-            # Find the next available ID
-            new_id = 1
-            while new_id in existing_ids:
-                new_id += 1
-            
-            area_id = str(new_id)
-            item = QTreeWidgetItem([
-                f"Area {area_id}",
-                f"X: {x}, Y: {y}",
-                f"W: {w}, H: {h}",
-                ""  # Empty for Action column, will be filled with button
-            ])
-            item.setData(0, Qt.UserRole, area_id)
-            self.areas_tree.addTopLevelItem(item)
-            # Add action button for this area
-            self._add_action_button(item, area_id)
-            self.save_area_config(area_id, x, y, w, h)
-            self.area_selected = True
-            self.update_button_states()
-            
-            # Select the newly added area and automatically start translation
-            self.areas_tree.setCurrentItem(item)
-            # Use QTimer.singleShot to ensure UI is updated before starting translation
-            QTimer.singleShot(100, self.start_translation)
-        self.show()
+        try:
+            self.hide()
+            screenshot, region = capture_screen_region()
+            if region:
+                x, y, w, h = region
+                # Get existing area IDs
+                existing_ids = set()
+                for i in range(self.areas_tree.topLevelItemCount()):
+                    item = self.areas_tree.topLevelItem(i)
+                    existing_ids.add(int(item.data(0, Qt.UserRole)))
+                
+                # Find the next available ID
+                new_id = 1
+                while new_id in existing_ids:
+                    new_id += 1
+                
+                area_id = str(new_id)
+                item = QTreeWidgetItem([
+                    f"Area {area_id}",
+                    f"X: {x}, Y: {y}",
+                    f"W: {w}, H: {h}",
+                    ""  # Empty for Action column, will be filled with button
+                ])
+                item.setData(0, Qt.UserRole, area_id)
+                self.areas_tree.addTopLevelItem(item)
+                # Add action button for this area
+                self._add_action_button(item, area_id)
+                self.save_area_config(area_id, x, y, w, h)
+                self.area_selected = True
+                self.update_button_states()
+                
+                # Select the newly added area and automatically start translation
+                self.areas_tree.setCurrentItem(item)
+                # Use QTimer.singleShot to ensure UI is updated before starting translation
+                QTimer.singleShot(100, self.start_translation)
+        except Exception as e:
+            logger.error(f"Error adding area: {str(e)}", exc_info=True)
+            show_error_message(self, "Error", f"Failed to add translation area:\n{str(e)}")
+        finally:
+            # Always show the window again, even if there was an error
+            self.show()
 
     def _delete_area_by_id(self, area_id: str):
         """Delete an area by its ID."""
