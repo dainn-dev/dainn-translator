@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QShortcut
 )
-from PyQt5.QtCore import Qt, QTimer, QPoint, QCoreApplication, QAbstractNativeEventFilter, QEvent, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QPoint, QCoreApplication, QAbstractNativeEventFilter, QEvent
 from PyQt5.QtGui import QFont, QColor, QKeySequence
 from src.config_manager import ConfigManager
 from src.text_processing import TextProcessor
@@ -183,49 +183,6 @@ class RateLimiter:
                 return
             self.calls.append(time.time())
 
-
-class TranslationWorker(QThread):
-    """Worker thread for non-blocking translation."""
-    translation_complete = pyqtSignal(str, str)  # original_text, translated_text
-    translation_failed = pyqtSignal(str, str)  # original_text, error_message
-    
-    def __init__(self, text_processor: TextProcessor, text: str, 
-                 target_language: str, source_language: str, 
-                 rate_limiter: RateLimiter, config_manager: ConfigManager):
-        super().__init__()
-        self.text_processor = text_processor
-        self.text = text
-        self.target_language = target_language
-        self.source_language = source_language
-        self.rate_limiter = rate_limiter
-        self.config_manager = config_manager
-    
-    def run(self):
-        """Execute translation in background thread."""
-        try:
-            logger.debug(f"Translation worker starting: '{self.text[:50]}...' "
-                        f"({self.source_language} -> {self.target_language})")
-            
-            self.rate_limiter.add_request()
-            translated = self.text_processor.translate_text(
-                self.text,
-                self.target_language,
-                self.source_language
-            )
-            
-            if translated:
-                logger.debug(f"Translation worker completed: '{translated[:50]}...'")
-                self.translation_complete.emit(self.text, translated)
-            else:
-                error_msg = "Translation returned empty result"
-                logger.warning(f"{error_msg}: '{self.text[:50]}...'")
-                self.translation_failed.emit(self.text, error_msg)
-                
-        except Exception as e:
-            error_msg = f"Translation error: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            self.translation_failed.emit(self.text, error_msg)
-
 class TranslationWindow(QMainWindow):
     """Window to display real-time translations."""
     
@@ -390,18 +347,6 @@ class TranslationWindow(QMainWindow):
         )
         self.dialogue_label.setVisible(True)  # Ensure it's visible
         self.content_layout.addWidget(self.dialogue_label)
-        
-        # Loading indicator (hidden by default)
-        self.loading_label = QLabel("⏳ Translating...")
-        self.loading_label.setWordWrap(True)
-        self.loading_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.loading_label.setFont(font)
-        self.loading_label.setStyleSheet(
-            f"color: {self.settings['dialogue_color']}; background-color: transparent;"
-            "padding: 2px; opacity: 0.7;"
-        )
-        self.loading_label.setVisible(False)
-        self.content_layout.addWidget(self.loading_label)
 
         # Add stretch to push any extra space to the bottom
         self.content_layout.addStretch()
@@ -462,10 +407,6 @@ class TranslationWindow(QMainWindow):
         self.max_same_frames = 10  # After 10 same frames, increase interval
         self.frame_change_threshold = 0.95  # Hash similarity threshold
         self.min_change_threshold = 0.85  # Minimum similarity to consider frames different
-        
-        # Async translation tracking
-        self.pending_translation_worker: Optional[TranslationWorker] = None
-        self.pending_translation_text: Optional[str] = None
 
     def init_shortcuts(self):
         """Register application shortcuts."""
@@ -693,13 +634,6 @@ class TranslationWindow(QMainWindow):
             self.running = False
             self.is_capturing = False
             
-            # Stop any pending translation worker
-            if hasattr(self, 'pending_translation_worker') and self.pending_translation_worker:
-                if self.pending_translation_worker.isRunning():
-                    self.pending_translation_worker.terminate()
-                    self.pending_translation_worker.wait(1000)  # Wait up to 1 second
-                self.pending_translation_worker = None
-            
             # Stop timers
             if hasattr(self, 'timer') and self.timer:
                 self.timer.stop()
@@ -906,25 +840,11 @@ class TranslationWindow(QMainWindow):
             )
             
             if cached_translation:
-                self.loading_label.setVisible(False)  # Ensure loading indicator is hidden
                 self.update_text(cached_translation)
                 self.last_text = text
                 self.last_translated_text = cached_translation
                 self.processing = False
                 return
-            
-            # Cancel any pending translation if text has changed
-            if self.pending_translation_worker and self.pending_translation_worker.isRunning():
-                if self.pending_translation_text != text:
-                    logger.debug("Cancelling stale translation, starting new one")
-                    self.pending_translation_worker.terminate()
-                    self.pending_translation_worker.wait(500)  # Wait up to 500ms
-                    self.pending_translation_worker = None
-                    self.pending_translation_text = None
-                else:
-                    logger.debug("Translation already in progress for same text, skipping new request")
-                    self.processing = False
-                    return
             
             # Check rate limit before making API call
             if not self.rate_limiter.can_make_request():
@@ -933,29 +853,62 @@ class TranslationWindow(QMainWindow):
                 self.processing = False
                 return
             
-            # Show loading indicator
-            self.loading_label.setVisible(True)
-            self.loading_label.setText("⏳ Translating...")
-            QApplication.processEvents()  # Update UI immediately
+            # Translate text in a separate thread
+            def translate_text():
+                logger.debug(f"Starting translation: '{text[:50]}...' ({self.settings['source_language']} -> {self.settings['target_language']})")
+                self.rate_limiter.add_request()
+                translated = self.text_processor.translate_text(
+                    text, 
+                    self.settings['target_language'], 
+                    self.settings['source_language']
+                )
+                logger.debug(f"Translation completed: '{translated[:50] if translated else '(empty)'}...'")
+                # Only update Translation API counter if we actually made an API call
+                if not cached_translation:
+                    translation_mode = self.config_manager.get_translation_mode()
+                    if translation_mode == 'local':
+                        self.translation_counter_label.setText(f"LLM: Ready")
+                    elif translation_mode == 'libretranslate':
+                        self.translation_counter_label.setText(f"LibreTranslate: Ready")
+                    else:
+                        self.translation_counter_label.setText(f"Translation API: {self.text_processor.translation_api_calls_today} requests")
+                return translated
             
-            # Store pending translation text
-            self.pending_translation_text = text
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(translate_text)
+                try:
+                    # Add timeout to prevent UI freezing (45 seconds should be enough for most translations)
+                    # This accounts for endpoint detection + actual translation
+                    translated_text = future.result(timeout=45)
+                except TimeoutError:
+                    logger.error("Translation timed out after 30 seconds")
+                    translated_text = text  # Fallback to original text
+                except Exception as e:
+                    logger.error(f"Translation error: {str(e)}", exc_info=True)
+                    translated_text = text  # Fallback to original text
             
-            # Create and start translation worker thread
-            self.pending_translation_worker = TranslationWorker(
-                self.text_processor,
+            # Check if translation was successful
+            if not translated_text or translated_text.strip() == "":
+                logger.warning(f"Translation returned empty text. Original: '{text[:50]}...'")
+                translated_text = text  # Fallback to original text
+            
+            # Check if translation is the same as original (might indicate failure)
+            if translated_text == text:
+                logger.debug(f"Translation same as original (might be cached or failed): '{text[:50]}...'")
+            
+            # Cache the translation
+            self.translation_cache.put(
                 text,
-                self.settings['target_language'],
                 self.settings['source_language'],
-                self.rate_limiter,
-                self.config_manager
+                self.settings['target_language'],
+                translated_text
             )
-            self.pending_translation_worker.translation_complete.connect(self._on_translation_complete)
-            self.pending_translation_worker.translation_failed.connect(self._on_translation_failed)
-            self.pending_translation_worker.start()
             
-            # Continue processing - don't wait for translation
-            self.processing = False
+            # Update display
+            logger.info(f"Calling update_text with: '{translated_text[:100]}...'")
+            self.update_text(translated_text)
+            self.last_text = text
+            self.last_translated_text = translated_text
             
             # Adjust timer interval based on content
             if not text:
@@ -971,91 +924,8 @@ class TranslationWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Translation error: {str(e)}", exc_info=True)
             self.update_text(self.last_translated_text)
-            self.loading_label.setVisible(False)
         finally:
             self.processing = False
-    
-    def _on_translation_complete(self, original_text: str, translated_text: str):
-        """Handle successful translation completion."""
-        try:
-            # Hide loading indicator
-            self.loading_label.setVisible(False)
-            
-            # Check if this translation is still relevant (text hasn't changed)
-            if self.pending_translation_text != original_text:
-                logger.debug("Translation result is stale, ignoring")
-                return
-            
-            # Check if translation was successful
-            if not translated_text or translated_text.strip() == "":
-                logger.warning(f"Translation returned empty text. Original: '{original_text[:50]}...'")
-                translated_text = original_text  # Fallback to original text
-            
-            # Check if translation is the same as original (might indicate failure)
-            if translated_text == original_text:
-                logger.debug(f"Translation same as original (might be cached or failed): '{original_text[:50]}...'")
-            
-            # Cache the translation
-            self.translation_cache.put(
-                original_text,
-                self.settings['source_language'],
-                self.settings['target_language'],
-                translated_text
-            )
-            
-            # Update display
-            logger.info(f"Calling update_text with: '{translated_text[:100]}...'")
-            self.update_text(translated_text)
-            self.last_text = original_text
-            self.last_translated_text = translated_text
-            
-            # Update translation counter
-            translation_mode = self.config_manager.get_translation_mode()
-            if translation_mode == 'local':
-                self.translation_counter_label.setText(f"LLM: Ready")
-            elif translation_mode == 'libretranslate':
-                self.translation_counter_label.setText(f"LibreTranslate: Ready")
-            else:
-                self.translation_counter_label.setText(f"Translation API: {self.text_processor.translation_api_calls_today} requests")
-            
-            # Clear pending translation
-            self.pending_translation_worker = None
-            self.pending_translation_text = None
-            
-        except Exception as e:
-            logger.error(f"Error handling translation completion: {str(e)}", exc_info=True)
-            self.loading_label.setVisible(False)
-    
-    def _on_translation_failed(self, original_text: str, error_message: str):
-        """Handle translation failure."""
-        try:
-            # Hide loading indicator
-            self.loading_label.setVisible(False)
-            
-            logger.error(f"Translation failed: {error_message}")
-            
-            # Show last translated text or original text as fallback
-            if self.last_translated_text:
-                self.update_text(self.last_translated_text)
-            else:
-                self.update_text(original_text)
-            
-            # Update translation counter to show error
-            translation_mode = self.config_manager.get_translation_mode()
-            if translation_mode == 'libretranslate':
-                self.translation_counter_label.setText(f"LibreTranslate: Error")
-            elif translation_mode == 'local':
-                self.translation_counter_label.setText(f"LLM: Error")
-            else:
-                self.translation_counter_label.setText(f"Translation API: Error")
-            
-            # Clear pending translation
-            self.pending_translation_worker = None
-            self.pending_translation_text = None
-            
-        except Exception as e:
-            logger.error(f"Error handling translation failure: {str(e)}", exc_info=True)
-            self.loading_label.setVisible(False)
 
     def update_text(self, text: str):
         """Update displayed text."""
