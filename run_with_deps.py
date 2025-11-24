@@ -10,6 +10,38 @@ import re
 import os
 import importlib
 
+# Fix Windows console encoding issues
+if sys.platform == 'win32':
+    try:
+        # Try to set UTF-8 encoding for stdout/stderr
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        if hasattr(sys.stderr, 'reconfigure'):
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        # If reconfiguration fails, we'll handle encoding errors in print statements
+        pass
+
+
+def safe_print(*args, **kwargs):
+    """Print function that handles encoding errors gracefully."""
+    try:
+        print(*args, **kwargs)
+    except UnicodeEncodeError:
+        # Fallback: replace problematic characters with ASCII equivalents
+        safe_args = []
+        for arg in args:
+            if isinstance(arg, str):
+                # Replace common emojis with ASCII equivalents
+                safe_str = arg.replace('📦', '[PKG]').replace('✅', '[OK]').replace('⚠️', '[WARN]')
+                safe_str = safe_str.replace('❌', '[ERR]').replace('📋', '[INFO]').replace('🚀', '[RUN]')
+                safe_str = safe_str.replace('🔄', '[RETRY]')
+                safe_args.append(safe_str)
+            else:
+                safe_args.append(arg)
+        print(*safe_args, **kwargs)
+
+
 # Module to package name mappings
 MODULE_TO_PACKAGE = {
     'cv2': 'opencv-python',
@@ -28,7 +60,7 @@ MODULE_TO_PACKAGE = {
 
 def install_package(package_name, quiet=True):
     """Install a package using pip."""
-    print(f"\n📦 Installing missing package: {package_name}")
+    safe_print(f"\n📦 Installing missing package: {package_name}")
     try:
         cmd = [sys.executable, "-m", "pip", "install"]
         if quiet:
@@ -43,18 +75,18 @@ def install_package(package_name, quiet=True):
         )
         
         if result.returncode == 0:
-            print(f"✅ Successfully installed {package_name}")
+            safe_print(f"✅ Successfully installed {package_name}")
             return True
         else:
-            print(f"⚠️  Warning: pip install returned error code {result.returncode}")
+            safe_print(f"⚠️  Warning: pip install returned error code {result.returncode}")
             if result.stderr:
                 print(f"Error: {result.stderr[:200]}")
             return False
     except subprocess.TimeoutExpired:
-        print(f"❌ Timeout installing {package_name}")
+        safe_print(f"❌ Timeout installing {package_name}")
         return False
     except Exception as e:
-        print(f"❌ Failed to install {package_name}: {e}")
+        safe_print(f"❌ Failed to install {package_name}: {e}")
         return False
 
 
@@ -78,6 +110,11 @@ def map_module_to_package(module_name):
     # Check exact match first
     if module_name in MODULE_TO_PACKAGE:
         return MODULE_TO_PACKAGE[module_name]
+    
+    # Special case: "google" module needs both packages
+    if module_name == 'google':
+        # Return a list to indicate multiple packages needed
+        return ['google-cloud-translate', 'google-cloud-vision']
     
     # Check if it starts with a known prefix
     for key, value in MODULE_TO_PACKAGE.items():
@@ -105,7 +142,7 @@ def check_and_install_requirements():
     requirements_file = os.path.join(os.getcwd(), "requirements.txt")
     
     if os.path.exists(requirements_file):
-        print("📋 Installing dependencies from requirements.txt...")
+        safe_print("📋 Installing dependencies from requirements.txt...")
         try:
             result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "-q", "--upgrade", "pip"],
@@ -120,16 +157,16 @@ def check_and_install_requirements():
             )
             
             if result.returncode == 0:
-                print("✅ Dependencies check complete\n")
+                safe_print("✅ Dependencies check complete\n")
                 return True
             else:
-                print("⚠️  Warning: Some packages from requirements.txt failed to install")
+                safe_print("⚠️  Warning: Some packages from requirements.txt failed to install")
                 return False
         except Exception as e:
-            print(f"⚠️  Warning: Error installing from requirements.txt: {e}")
+            safe_print(f"⚠️  Warning: Error installing from requirements.txt: {e}")
             return False
     else:
-        print("⚠️  Warning: requirements.txt not found, skipping initial dependency installation")
+        safe_print("⚠️  Warning: requirements.txt not found, skipping initial dependency installation")
         return False
 
 
@@ -138,7 +175,7 @@ def run_main_with_auto_install(max_retries=10):
     script_path = os.path.join(os.getcwd(), "main.py")
     
     if not os.path.exists(script_path):
-        print(f"❌ Error: {script_path} not found")
+        safe_print(f"❌ Error: {script_path} not found")
         sys.exit(1)
     
     # First, try to install from requirements.txt
@@ -150,7 +187,7 @@ def run_main_with_auto_install(max_retries=10):
     while retries < max_retries:
         try:
             # Try to actually run the script
-            print(f"🚀 Running {script_path}...\n")
+            safe_print(f"🚀 Running {script_path}...\n")
             
             # Run as subprocess to capture stderr
             process = subprocess.Popen(
@@ -188,58 +225,75 @@ def run_main_with_auto_install(max_retries=10):
                 module_name = extract_module_name(stderr_text)
                 
                 if not module_name:
-                    print(f"❌ Error: Could not extract module name from error")
-                    print(f"Error output:\n{stderr_text[:500]}")
+                    safe_print(f"❌ Error: Could not extract module name from error")
+                    safe_print(f"Error output:\n{stderr_text[:500]}")
                     sys.exit(return_code)
                 
                 # Check if we've already tried to install this
                 if module_name in installed_packages:
-                    print(f"❌ Error: Failed to install {module_name} after retry")
-                    print(f"Error output:\n{stderr_text[:500]}")
+                    safe_print(f"❌ Error: Failed to install {module_name} after retry")
+                    safe_print(f"Error output:\n{stderr_text[:500]}")
                     sys.exit(1)
                 
                 # Map module name to package name
                 package_name = map_module_to_package(module_name)
                 
-                # Install the package
-                if install_package(package_name):
-                    installed_packages.add(module_name)
-                    retries += 1
-                    print(f"🔄 Retrying... (attempt {retries}/{max_retries})\n")
-                    continue
-                else:
-                    # Try alternative package name
-                    if package_name != module_name:
-                        print(f"🔄 Trying alternative package name: {module_name}")
-                        if install_package(module_name):
-                            installed_packages.add(module_name)
-                            retries += 1
-                            print(f"🔄 Retrying... (attempt {retries}/{max_retries})\n")
-                            continue
+                # Handle case where multiple packages are needed (e.g., google)
+                if isinstance(package_name, list):
+                    all_installed = True
+                    for pkg in package_name:
+                        if not install_package(pkg):
+                            all_installed = False
                     
-                    print(f"❌ Error: Could not install required package: {package_name}")
-                    print(f"Error output:\n{stderr_text[:500]}")
-                    sys.exit(1)
+                    if all_installed:
+                        installed_packages.add(module_name)
+                        retries += 1
+                        safe_print(f"🔄 Retrying... (attempt {retries}/{max_retries})\n")
+                        continue
+                    else:
+                        safe_print(f"❌ Error: Could not install required packages: {package_name}")
+                        safe_print(f"Error output:\n{stderr_text[:500]}")
+                        sys.exit(1)
+                else:
+                    # Install the package
+                    if install_package(package_name):
+                        installed_packages.add(module_name)
+                        retries += 1
+                        safe_print(f"🔄 Retrying... (attempt {retries}/{max_retries})\n")
+                        continue
+                    else:
+                        # Try alternative package name
+                        if package_name != module_name:
+                            safe_print(f"🔄 Trying alternative package name: {module_name}")
+                            if install_package(module_name):
+                                installed_packages.add(module_name)
+                                retries += 1
+                                safe_print(f"🔄 Retrying... (attempt {retries}/{max_retries})\n")
+                                continue
+                        
+                        safe_print(f"❌ Error: Could not install required package: {package_name}")
+                        safe_print(f"Error output:\n{stderr_text[:500]}")
+                        sys.exit(1)
             else:
                 # Other error - print and exit with return code
                 if stderr_text:
-                    print(f"\n❌ Error running main.py:")
-                    print(stderr_text)
+                    safe_print(f"\n❌ Error running main.py:")
+                    safe_print(stderr_text)
                 sys.exit(return_code)
         
         except KeyboardInterrupt:
-            print("\n\n⚠️  Interrupted by user")
+            safe_print("\n\n⚠️  Interrupted by user")
             sys.exit(0)
             
         except Exception as e:
             # Unexpected error
-            print(f"❌ Unexpected error: {e}")
+            safe_print(f"❌ Unexpected error: {e}")
             import traceback
             traceback.print_exc()
             sys.exit(1)
     
     if retries >= max_retries:
-        print(f"❌ Error: Exceeded maximum retry attempts ({max_retries})")
+        safe_print(f"❌ Error: Exceeded maximum retry attempts ({max_retries})")
         sys.exit(1)
 
 
@@ -247,6 +301,6 @@ if __name__ == "__main__":
     try:
         run_main_with_auto_install()
     except KeyboardInterrupt:
-        print("\n\n⚠️  Interrupted by user")
+        safe_print("\n\n⚠️  Interrupted by user")
         sys.exit(0)
 
