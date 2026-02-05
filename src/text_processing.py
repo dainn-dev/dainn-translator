@@ -7,6 +7,8 @@ from google.cloud import vision
 import numpy as np
 from collections import OrderedDict
 from src.config_manager import ConfigManager
+from src.dictionary_utils import normalize_en, hash_md5, hash_sha1
+from difflib import SequenceMatcher
 import logging
 import cv2
 
@@ -34,6 +36,13 @@ except ImportError:
     LIBRETRANSLATE_AVAILABLE = False
     logger.warning("LibreTranslate translator not available.")
 
+try:
+    from src.translator.gemini_translator import GeminiTranslator
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    logger.warning("Gemini translator not available.")
+
 # Try to import PaddleOCR
 try:
     from paddleocr import PaddleOCR
@@ -49,12 +58,14 @@ class TextProcessor:
                  vision_client: Optional[vision.ImageAnnotatorClient] = None,
                  llm_studio_translator: Optional['LLMStudioTranslator'] = None,
                  libretranslate_translator: Optional['LibreTranslateTranslator'] = None,
+                 gemini_translator: Optional['GeminiTranslator'] = None,
                  cache_size: int = None):
         logger.info("Initializing TextProcessor...")
         self.translate_client = translate_client
         self.vision_client = vision_client
         self.llm_studio_translator = llm_studio_translator
         self.libretranslate_translator = libretranslate_translator
+        self.gemini_translator = gemini_translator
         self.translation_cache = OrderedDict()
         self.max_cache_size = cache_size  # None means unlimited
         self.api_quota_limit = None  # None means unlimited
@@ -63,14 +74,101 @@ class TextProcessor:
         self.last_quota_reset = datetime.now().date()
         self.config_manager = ConfigManager()
         self.translation_history: List[Dict] = []
+        # In-memory CSV dictionary (EN→VI), keyed by hash of normalized EN text
+        self.dict_md5: Dict[str, str] = {}
+        self.dict_sha1: Dict[str, str] = {}
+        self.dict_normalized_entries: List[Tuple[str, str]] = []  # (normalized_en, vi_text) for fuzzy scan
+        self.dict_entry_count: int = 0
         logger.info("TextProcessor initialization complete.")
+
+    # --- CSV Dictionary methods (EN→VI, in-memory only) ---
+
+    def set_dictionary(self, entries: List[Tuple[str, str]]) -> int:
+        """
+        Populate the in-memory dictionary from a list of (en_text, vi_text) pairs.
+        Normalizes EN text and stores both MD5 and SHA1 hashes as keys.
+        Returns the number of entries loaded (duplicates are overwritten, last wins).
+        """
+        self.dict_md5.clear()
+        self.dict_sha1.clear()
+        self.dict_normalized_entries.clear()
+        duplicates = 0
+        for en_text, vi_text in entries:
+            normalized = normalize_en(en_text)
+            if not normalized:
+                continue
+            md5_key = hash_md5(normalized)
+            sha1_key = hash_sha1(normalized)
+            if md5_key in self.dict_md5:
+                duplicates += 1
+            self.dict_md5[md5_key] = vi_text
+            self.dict_sha1[sha1_key] = vi_text
+            self.dict_normalized_entries.append((normalized, vi_text))
+        self.dict_entry_count = len(self.dict_md5)
+        if duplicates:
+            logger.info(f"Dictionary loaded: {self.dict_entry_count} entries ({duplicates} duplicates overwritten)")
+        else:
+            logger.info(f"Dictionary loaded: {self.dict_entry_count} entries")
+        return self.dict_entry_count
+
+    def clear_dictionary(self):
+        """Clear the in-memory dictionary."""
+        self.dict_md5.clear()
+        self.dict_sha1.clear()
+        self.dict_normalized_entries.clear()
+        self.dict_entry_count = 0
+        logger.info("Dictionary cleared")
+
+    DICT_MATCH_THRESHOLD = 0.80
+
+    def lookup_dictionary(self, text: str) -> Optional[Tuple[str, float]]:
+        """
+        Look up text in the CSV dictionary.
+
+        1. Normalizes the input, tries exact hash match (MD5 then SHA1).
+        2. If no exact match, performs a fuzzy scan using SequenceMatcher
+           and returns the best match if its ratio >= DICT_MATCH_THRESHOLD.
+
+        Returns:
+            (vi_translation, match_ratio) if a match is found, otherwise None.
+        """
+        if not self.dict_md5:
+            return None
+        normalized = normalize_en(text)
+        if not normalized:
+            return None
+
+        # --- Fast path: exact hash match (100%) ---
+        md5_key = hash_md5(normalized)
+        result = self.dict_md5.get(md5_key)
+        if result is not None:
+            return result, 1.0
+        sha1_key = hash_sha1(normalized)
+        result = self.dict_sha1.get(sha1_key)
+        if result is not None:
+            return result, 1.0
+
+        # --- Fuzzy fallback: scan all normalized entries ---
+        best_ratio = 0.0
+        best_vi = None
+        for norm_en, vi_text in self.dict_normalized_entries:
+            ratio = SequenceMatcher(None, normalized, norm_en).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_vi = vi_text
+        if best_ratio >= self.DICT_MATCH_THRESHOLD and best_vi is not None:
+            return best_vi, best_ratio
+
+        return None
+
+    # --- End CSV Dictionary methods ---
 
     def detect_text(self, image: np.ndarray) -> str:
         """Detect text in an image using Google Cloud Vision API, Tesseract OCR, or PaddleOCR."""
         translation_mode = self.config_manager.get_translation_mode()
         
-        if translation_mode == 'local' or translation_mode == 'libretranslate':
-            # Use local OCR (Tesseract or PaddleOCR) for local mode and libretranslate mode
+        if translation_mode == 'local' or translation_mode == 'libretranslate' or translation_mode == 'gemini':
+            # Use local OCR (Tesseract or PaddleOCR) for local mode, libretranslate mode, and gemini mode
             ocr_mode = self.config_manager.get_ocr_mode()
             if ocr_mode == 'paddleocr':
                 return self._detect_text_paddleocr(image)
@@ -295,6 +393,26 @@ class TextProcessor:
         if not text:
             return ""
 
+        # --- CSV Dictionary lookup (EN→VI only, before any API call) ---
+        if source_language == 'en' and target_language == 'vi' and self.dict_entry_count > 0:
+            dict_result = self.lookup_dictionary(text)
+            if dict_result is not None:
+                dict_translation, match_ratio = dict_result
+                logger.debug(f"Dictionary hit ({match_ratio:.0%}) for: '{text[:50]}...' -> '{dict_translation[:50]}...'")
+                # Cache the result so subsequent identical texts are fast
+                cache_key_dict = f"{text}_{target_language}_{source_language}_dictionary"
+                self.translation_cache[cache_key_dict] = dict_translation
+                # Save to history
+                self.translation_history.append({
+                    'original': text,
+                    'translated': dict_translation,
+                    'language': target_language,
+                    'service': f'Dictionary ({match_ratio:.0%})'
+                })
+                self._save_translation_history()
+                return dict_translation
+        # --- End Dictionary lookup ---
+
         translation_mode = self.config_manager.get_translation_mode()
         
         cache_key = f"{text}_{target_language}_{source_language}_{translation_mode}"
@@ -310,6 +428,10 @@ class TextProcessor:
                 # Use LibreTranslate for translation
                 translated_text = self._translate_text_libretranslate(text, target_language, source_language)
                 service_name = 'LibreTranslate'
+            elif translation_mode == 'gemini':
+                # Use Gemini for translation
+                translated_text = self._translate_text_gemini(text, target_language, source_language)
+                service_name = 'Gemini'
             else:
                 # Use Google Cloud Translate
                 if not self.check_api_quota():
@@ -419,3 +541,27 @@ class TextProcessor:
         """Update the LibreTranslate translator instance."""
         logger.info("Updating LibreTranslate translator in TextProcessor")
         self.libretranslate_translator = libretranslate_translator
+    
+    def _translate_text_gemini(self, text: str, target_language: str, source_language: Optional[str] = None) -> str:
+        """Translate text using Gemini."""
+        if not self.gemini_translator:
+            logger.error("Gemini translator not initialized")
+            return text
+        
+        try:
+            logger.debug(f"Gemini translation: '{text[:50]}...' ({source_language} -> {target_language})")
+            translated_text = self.gemini_translator.translate(
+                text,
+                source_language or 'auto',
+                target_language
+            )
+            logger.debug(f"Gemini translation result: '{translated_text[:50]}...'")
+            return translated_text
+        except Exception as e:
+            logger.error(f"Gemini translation error: {str(e)}", exc_info=True)
+            return text
+    
+    def set_gemini_translator(self, gemini_translator: Optional['GeminiTranslator']) -> None:
+        """Update the Gemini translator instance."""
+        logger.info("Updating Gemini translator in TextProcessor")
+        self.gemini_translator = gemini_translator

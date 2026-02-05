@@ -70,6 +70,7 @@ def main():
         vision_client = None
         llm_studio_translator = None
         libretranslate_translator = None
+        gemini_translator = None
 
         if translation_mode == 'google':
             # Google Cloud mode
@@ -108,6 +109,36 @@ def main():
                 logger.info("LibreTranslate connection successful")
             else:
                 logger.warning("LibreTranslate connection test failed. The API may not be running.")
+        elif translation_mode == 'gemini':
+            # Gemini mode
+            logger.info("Initializing Gemini translator...")
+            from src.translator.gemini_translator import GeminiTranslator
+            
+            gemini_api_key = config_manager.get_gemini_api_key()
+            if not gemini_api_key:
+                logger.warning("No Gemini API key found. Please set up API key in the settings.")
+                # Create main window anyway to allow user to set up API key
+                app = QApplication(sys.argv)
+                main_window = MainWindow(None, config_manager)  # Pass None as text_processor
+                main_window.show()
+                return app.exec()
+            
+            try:
+                gemini_model = config_manager.get_gemini_model()
+                gemini_translator = GeminiTranslator(gemini_api_key, model_name=gemini_model)
+                
+                # Test connection
+                if gemini_translator.test_connection():
+                    logger.info(f"Gemini connection successful with model: {gemini_model}")
+                else:
+                    logger.warning("Gemini connection test failed. Please check your API key.")
+            except Exception as e:
+                logger.error(f"Failed to initialize Gemini translator: {str(e)}")
+                # Create main window anyway to allow user to fix the issue
+                app = QApplication(sys.argv)
+                main_window = MainWindow(None, config_manager)  # Pass None as text_processor
+                main_window.show()
+                return app.exec()
         else:
             # Local LLM mode - will be initialized in background thread
             llm_studio_translator = None
@@ -118,7 +149,8 @@ def main():
             translate_client=translate_client,
             vision_client=vision_client,
             llm_studio_translator=llm_studio_translator,
-            libretranslate_translator=libretranslate_translator
+            libretranslate_translator=libretranslate_translator,
+            gemini_translator=gemini_translator
         )
         logger.info("TextProcessor created successfully")
 

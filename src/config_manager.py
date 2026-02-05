@@ -56,7 +56,11 @@ class ConfigManager:
             'llm_studio_model': '',
             'tesseract_path': '',
             'libretranslate_url': 'http://localhost:5000',
-            'ocr_mode': 'tesseract'
+            'gemini_api_key': '',
+            'gemini_model': 'gemini-1.5-flash',
+            'ocr_mode': 'tesseract',
+            'capture_window_title': '',
+            'capture_window_hwnd': ''
         }
 
     def create_languages_section(self) -> None:
@@ -197,20 +201,32 @@ class ConfigManager:
             del self.config[window_id]
             self.save_config()
 
-    def get_area(self, area_id: str) -> Optional[Dict[str, int]]:
-        """Get area configuration"""
+    def get_area(self, area_id: str) -> Optional[Dict]:
+        """Get area configuration (supports both legacy absolute and pct-based)"""
         try:
+            # Try pct-based first
+            has_pct = f'{area_id}_x_pct' in self.config['Areas']
+            if has_pct:
+                return {
+                    'x_pct': self.config.getfloat('Areas', f'{area_id}_x_pct'),
+                    'y_pct': self.config.getfloat('Areas', f'{area_id}_y_pct'),
+                    'w_pct': self.config.getfloat('Areas', f'{area_id}_w_pct'),
+                    'h_pct': self.config.getfloat('Areas', f'{area_id}_h_pct'),
+                    'is_pct': True
+                }
+            # Legacy absolute
             return {
                 'x': self.config.getint('Areas', f'{area_id}_x'),
                 'y': self.config.getint('Areas', f'{area_id}_y'),
                 'width': self.config.getint('Areas', f'{area_id}_width'),
-                'height': self.config.getint('Areas', f'{area_id}_height')
+                'height': self.config.getint('Areas', f'{area_id}_height'),
+                'is_pct': False
             }
         except (configparser.NoSectionError, configparser.NoOptionError):
             return None
 
     def save_area(self, area_id: str, x: int, y: int, width: int, height: int) -> None:
-        """Save area configuration"""
+        """Save area configuration (legacy absolute coords)"""
         try:
             logger.info(f"Saving area {area_id}: x={x}, y={y}, width={width}, height={height}")
             if 'Areas' not in self.config:
@@ -224,22 +240,44 @@ class ConfigManager:
         except Exception as e:
             logger.error(f"Error saving area {area_id}: {str(e)}", exc_info=True)
 
+    def save_area_pct(self, area_id: str, x_pct: float, y_pct: float, w_pct: float, h_pct: float) -> None:
+        """Save area configuration as pct-of-window-client."""
+        try:
+            logger.info(f"Saving area {area_id} (pct): x_pct={x_pct:.4f}, y_pct={y_pct:.4f}, w_pct={w_pct:.4f}, h_pct={h_pct:.4f}")
+            if 'Areas' not in self.config:
+                self.config['Areas'] = {}
+            self.config['Areas'][f'{area_id}_x_pct'] = f'{x_pct:.6f}'
+            self.config['Areas'][f'{area_id}_y_pct'] = f'{y_pct:.6f}'
+            self.config['Areas'][f'{area_id}_w_pct'] = f'{w_pct:.6f}'
+            self.config['Areas'][f'{area_id}_h_pct'] = f'{h_pct:.6f}'
+            # Remove legacy keys if they exist
+            for legacy_key in [f'{area_id}_x', f'{area_id}_y', f'{area_id}_width', f'{area_id}_height']:
+                if legacy_key in self.config['Areas']:
+                    del self.config['Areas'][legacy_key]
+            self.save_config()
+            logger.info(f"Area {area_id} (pct) saved successfully")
+        except Exception as e:
+            logger.error(f"Error saving area {area_id} (pct): {str(e)}", exc_info=True)
+
     def delete_area(self, area_id: str) -> None:
         """Delete area configuration"""
         if 'Areas' in self.config:
-            for key in [f'{area_id}_x', f'{area_id}_y', f'{area_id}_width', f'{area_id}_height']:
+            for key in [f'{area_id}_x', f'{area_id}_y', f'{area_id}_width', f'{area_id}_height',
+                        f'{area_id}_x_pct', f'{area_id}_y_pct', f'{area_id}_w_pct', f'{area_id}_h_pct']:
                 if key in self.config['Areas']:
                     del self.config['Areas'][key]
             self.save_config()
 
-    def get_all_areas(self) -> Dict[str, Dict[str, int]]:
+    def get_all_areas(self) -> Dict[str, Dict]:
         """Get all area configurations"""
         areas = {}
         try:
             if 'Areas' in self.config:
                 area_ids = set()
                 for key in self.config['Areas']:
-                    area_id = key.split('_')[0]
+                    # Extract area id (everything before the first underscore-prefixed field)
+                    parts = key.split('_')
+                    area_id = parts[0]
                     area_ids.add(area_id)
                 
                 for area_id in area_ids:
@@ -251,6 +289,24 @@ class ConfigManager:
         except Exception as e:
             logger.error(f"Error loading areas: {str(e)}", exc_info=True)
             return {}
+
+    # --- Capture window settings ---
+
+    def get_capture_window_title(self) -> str:
+        """Get the last selected capture window title"""
+        return self.get_global_setting('capture_window_title', '')
+
+    def set_capture_window_title(self, title: str) -> None:
+        """Set the capture window title"""
+        self.set_global_setting('capture_window_title', title)
+
+    def get_capture_window_hwnd(self) -> str:
+        """Get the last selected capture window hwnd (as string)"""
+        return self.get_global_setting('capture_window_hwnd', '')
+
+    def set_capture_window_hwnd(self, hwnd: str) -> None:
+        """Set the capture window hwnd (as string)"""
+        self.set_global_setting('capture_window_hwnd', hwnd)
     
     def get_toggle_hotkey(self) -> str:
         """Get the toggle hotkey"""
@@ -289,13 +345,13 @@ class ConfigManager:
         self.set_global_setting('auto_pause_threshold', str(threshold))
     
     def get_translation_mode(self) -> str:
-        """Get translation mode ('google', 'local', or 'libretranslate')"""
+        """Get translation mode ('google', 'local', 'libretranslate', or 'gemini')"""
         return self.get_global_setting('translation_mode', 'google')
     
     def set_translation_mode(self, mode: str) -> None:
-        """Set translation mode ('google', 'local', or 'libretranslate')"""
-        if mode not in ('google', 'local', 'libretranslate'):
-            raise ValueError("Translation mode must be 'google', 'local', or 'libretranslate'")
+        """Set translation mode ('google', 'local', 'libretranslate', or 'gemini')"""
+        if mode not in ('google', 'local', 'libretranslate', 'gemini'):
+            raise ValueError("Translation mode must be 'google', 'local', 'libretranslate', or 'gemini'")
         self.set_global_setting('translation_mode', mode)
     
     def get_llm_studio_url(self) -> str:
@@ -338,4 +394,20 @@ class ConfigManager:
         """Set OCR mode ('tesseract' or 'paddleocr')"""
         if mode not in ('tesseract', 'paddleocr'):
             raise ValueError("OCR mode must be 'tesseract' or 'paddleocr'")
-        self.set_global_setting('ocr_mode', mode) 
+        self.set_global_setting('ocr_mode', mode)
+    
+    def get_gemini_api_key(self) -> str:
+        """Get Gemini API key"""
+        return self.get_global_setting('gemini_api_key', '')
+    
+    def set_gemini_api_key(self, api_key: str) -> None:
+        """Set Gemini API key"""
+        self.set_global_setting('gemini_api_key', api_key)
+    
+    def get_gemini_model(self) -> str:
+        """Get Gemini model name (default: gemini-1.5-flash)"""
+        return self.get_global_setting('gemini_model', 'gemini-1.5-flash')
+    
+    def set_gemini_model(self, model: str) -> None:
+        """Set Gemini model name"""
+        self.set_global_setting('gemini_model', model) 

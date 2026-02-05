@@ -16,6 +16,8 @@ from src.ui.translation_window import TranslationWindow
 from src.ui.utils import validate_credentials, show_error_message
 from src.text_processing import TextProcessor
 from src.version_checker import VersionChecker
+from src.window_capture import list_visible_windows, get_client_origin_and_size, is_window_valid, IS_WINDOWS as WC_IS_WINDOWS
+from src.dictionary_utils import parse_csv_dictionary
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +258,9 @@ class MainWindow(QMainWindow):
         # Initialize translation windows dictionary before loading areas
         self.translation_windows = {}
         
+        # Selected capture window handle (global for all areas)
+        self.selected_capture_hwnd: Optional[int] = None
+        
         # Initialize UI
         self.init_ui()
         self.load_languages_from_config()
@@ -266,6 +271,13 @@ class MainWindow(QMainWindow):
         self.update_settings_state(True)
 
         self.text_processor = text_processor
+
+        # Disable dictionary controls when TextProcessor is not available (e.g. missing API key)
+        if self.text_processor is None:
+            self.dict_load_button.setEnabled(False)
+            self.dict_clear_button.setEnabled(False)
+            self.dict_status_label.setText("Unavailable (translation not initialized)")
+            self.dict_load_button.setToolTip("Translation service is not initialized. Fix settings and restart.")
 
         # Check for updates after a short delay to ensure the window is fully loaded
         QTimer.singleShot(2000, self.check_for_updates)
@@ -616,16 +628,20 @@ class MainWindow(QMainWindow):
         self.mode_label.setToolTip("Select the translation service to use")
         self.mode_layout.addWidget(self.mode_label)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Google Cloud", "Local (Tesseract + LM Studio)", "LibreTranslate (Tesseract + LibreTranslate)"])
+        self.mode_combo.addItems(["Google Cloud", "Local (Tesseract + LM Studio)", "LibreTranslate (Tesseract + LibreTranslate)", "Gemini (Tesseract + Gemini)"])
         current_mode = self.config_manager.get_translation_mode()
         if current_mode == 'google':
             mode_index = 0
         elif current_mode == 'local':
             mode_index = 1
-        else:  # libretranslate
+        elif current_mode == 'libretranslate':
             mode_index = 2
+        elif current_mode == 'gemini':
+            mode_index = 3
+        else:
+            mode_index = 0
         self.mode_combo.setCurrentIndex(mode_index)
-        self.mode_combo.setToolTip("Google Cloud: Paid, high quality\nLocal: Free, requires LM Studio running\nLibreTranslate: Free, requires LibreTranslate server")
+        self.mode_combo.setToolTip("Google Cloud: Paid, high quality\nLocal: Free, requires LM Studio running\nLibreTranslate: Free, requires LibreTranslate server\nGemini: Free tier available, requires API key")
         self.mode_combo.currentIndexChanged.connect(self.on_translation_mode_changed)
         self.mode_layout.addWidget(self.mode_combo)
         self.mode_layout.addStretch()  # Add stretch to align left
@@ -765,6 +781,128 @@ class MainWindow(QMainWindow):
         self.libretranslate_tesseract_path_layout.addWidget(self.libretranslate_tesseract_test_button)
         self.libretranslate_layout.addLayout(self.libretranslate_tesseract_path_layout)
 
+        # Gemini settings (shown only when gemini mode is selected)
+        self.gemini_group = QGroupBox("🤖 Gemini Configuration")
+        self.gemini_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.gemini_group.setToolTip("Configure Google Gemini API for translation (free tier available)")
+        self.translation_mode_layout.addWidget(self.gemini_group)
+        self.gemini_layout = QVBoxLayout(self.gemini_group)
+        self.gemini_layout.setSpacing(8)
+
+        # Check if google-generativeai is installed
+        try:
+            import google.generativeai as genai
+            self.gemini_package_installed = True
+        except ImportError:
+            self.gemini_package_installed = False
+        
+        # Package installation notice and button
+        if not self.gemini_package_installed:
+            self.gemini_install_layout = QHBoxLayout()
+            self.gemini_install_label = QLabel("⚠️ google-generativeai package is not installed")
+            self.gemini_install_label.setStyleSheet("color: #ff6600; font-weight: bold;")
+            self.gemini_install_label.setToolTip("The google-generativeai package is required for Gemini translation")
+            self.gemini_install_layout.addWidget(self.gemini_install_label)
+            self.gemini_install_layout.addStretch()
+            self.gemini_install_button = QPushButton("📥 Install Package")
+            self.gemini_install_button.setToolTip("Install google-generativeai package using pip")
+            self.gemini_install_button.setStyleSheet(
+                f"QPushButton {{ background-color: {self.button_bg}; color: {self.button_fg}; padding: 6px 12px; border-radius: 4px; }}"
+                f"QPushButton:hover {{ background-color: {self.secondary_color}; }}"
+            )
+            self.gemini_install_button.clicked.connect(self.install_gemini_package)
+            self.gemini_install_layout.addWidget(self.gemini_install_button)
+            self.gemini_layout.addLayout(self.gemini_install_layout)
+            
+            # Installation status label
+            self.gemini_install_status_label = QLabel("")
+            self.gemini_install_status_label.setStyleSheet("color: #666666; font-size: 9pt;")
+            self.gemini_install_status_label.setWordWrap(True)
+            self.gemini_layout.addWidget(self.gemini_install_status_label)
+
+        # API Key setting
+        self.gemini_api_key_layout = QHBoxLayout()
+        self.gemini_api_key_label = QLabel("API Key:")
+        self.gemini_api_key_label.setToolTip("Google Gemini API key")
+        self.gemini_api_key_layout.addWidget(self.gemini_api_key_label)
+        self.gemini_api_key_edit = QLineEdit()
+        self.gemini_api_key_edit.setText(self.config_manager.get_gemini_api_key())
+        self.gemini_api_key_edit.setPlaceholderText("Enter your Gemini API key")
+        self.gemini_api_key_edit.setEchoMode(QLineEdit.Password)
+        self.gemini_api_key_edit.setToolTip("Enter your Google Gemini API key\nGet one from: https://makersuite.google.com/app/apikey")
+        self.gemini_api_key_edit.textChanged.connect(self.on_gemini_api_key_changed)
+        self.gemini_api_key_layout.addWidget(self.gemini_api_key_edit)
+        
+        # Show/Hide API key button
+        self.gemini_show_key_button = QPushButton("Show")
+        self.gemini_show_key_button.setToolTip("Show/hide API key")
+        self.gemini_show_key_button.clicked.connect(self.toggle_gemini_api_key_visibility)
+        self.gemini_api_key_layout.addWidget(self.gemini_show_key_button)
+        
+        # Test connection button
+        self.gemini_test_button = QPushButton("Test Connection")
+        self.gemini_test_button.setToolTip("Test if Gemini API is accessible and working")
+        self.gemini_test_button.clicked.connect(self.test_gemini)
+        self.gemini_api_key_layout.addWidget(self.gemini_test_button)
+        
+        self.gemini_layout.addLayout(self.gemini_api_key_layout)
+
+        # Model selection setting
+        self.gemini_model_layout = QHBoxLayout()
+        self.gemini_model_label = QLabel("Model:")
+        self.gemini_model_label.setToolTip("Gemini model to use for translation")
+        self.gemini_model_layout.addWidget(self.gemini_model_label)
+        self.gemini_model_edit = QLineEdit()
+        current_model = self.config_manager.get_gemini_model()
+        self.gemini_model_edit.setText(current_model)
+        self.gemini_model_edit.setPlaceholderText("gemini-1.5-flash")
+        self.gemini_model_edit.setToolTip(
+            "Enter the Gemini model name (e.g., gemini-1.5-flash, gemini-1.5-pro, gemini-pro)\n"
+            "gemini-1.5-flash: Fast and efficient (recommended)\n"
+            "gemini-1.5-pro: More capable, slower\n"
+            "gemini-pro: Legacy model"
+        )
+        self.gemini_model_edit.textChanged.connect(self.on_gemini_model_changed)
+        self.gemini_model_layout.addWidget(self.gemini_model_edit)
+        self.gemini_model_layout.addStretch()
+        self.gemini_layout.addLayout(self.gemini_model_layout)
+
+        # OCR mode setting for Gemini
+        self.gemini_ocr_mode_layout = QHBoxLayout()
+        self.gemini_ocr_mode_label = QLabel("Text Detection (OCR):")
+        self.gemini_ocr_mode_label.setToolTip("OCR engine for detecting text from screen")
+        self.gemini_ocr_mode_layout.addWidget(self.gemini_ocr_mode_label)
+        self.gemini_ocr_mode_combo = QComboBox()
+        self.gemini_ocr_mode_combo.addItems(["Tesseract OCR", "PaddleOCR"])
+        current_ocr_mode = self.config_manager.get_ocr_mode()
+        self.gemini_ocr_mode_combo.setCurrentIndex(0 if current_ocr_mode == 'tesseract' else 1)
+        self.gemini_ocr_mode_combo.setToolTip("Tesseract: Free, widely available\nPaddleOCR: Better accuracy, requires installation")
+        self.gemini_ocr_mode_combo.currentIndexChanged.connect(self.on_ocr_mode_changed)
+        self.gemini_ocr_mode_layout.addWidget(self.gemini_ocr_mode_combo)
+        self.gemini_layout.addLayout(self.gemini_ocr_mode_layout)
+
+        # Tesseract path setting for Gemini
+        self.gemini_tesseract_path_layout = QHBoxLayout()
+        self.gemini_tesseract_path_label = QLabel("Tesseract Path:")
+        self.gemini_tesseract_path_label.setToolTip("Path to tesseract.exe (leave empty if Tesseract is in system PATH)")
+        self.gemini_tesseract_path_layout.addWidget(self.gemini_tesseract_path_label)
+        self.gemini_tesseract_path_edit = QLineEdit()
+        self.gemini_tesseract_path_edit.setPlaceholderText("Leave empty to use system PATH")
+        self.gemini_tesseract_path_edit.setText(self.config_manager.get_tesseract_path())
+        self.gemini_tesseract_path_edit.setToolTip("Enter full path to tesseract.exe, or leave empty if Tesseract is installed and in your system PATH")
+        self.gemini_tesseract_path_edit.textChanged.connect(self.on_tesseract_path_changed)
+        self.gemini_tesseract_path_layout.addWidget(self.gemini_tesseract_path_edit)
+        self.gemini_tesseract_browse_button = QPushButton("Browse...")
+        self.gemini_tesseract_browse_button.setToolTip("Browse for tesseract.exe file")
+        self.gemini_tesseract_browse_button.clicked.connect(self.browse_tesseract_path)
+        self.gemini_tesseract_path_layout.addWidget(self.gemini_tesseract_browse_button)
+        
+        self.gemini_tesseract_test_button = QPushButton("Test")
+        self.gemini_tesseract_test_button.setToolTip("Test if Tesseract is installed and working correctly")
+        self.gemini_tesseract_test_button.clicked.connect(self.test_tesseract)
+        self.gemini_tesseract_path_layout.addWidget(self.gemini_tesseract_test_button)
+        self.gemini_layout.addLayout(self.gemini_tesseract_path_layout)
+
         # Credentials settings
         self.credentials_group = QGroupBox("☁️ Google Cloud Credentials")
         self.credentials_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
@@ -798,6 +936,67 @@ class MainWindow(QMainWindow):
         self.areas_layout.setSpacing(10)
         self.areas_layout.setContentsMargins(10, 15, 10, 10)
 
+        # --- Capture Window selector ---
+        self.capture_window_group = QGroupBox("🪟 Capture Window")
+        self.capture_window_group.setStyleSheet(f"background-color: {self.frame_bg}; padding-top: 8px;")
+        self.capture_window_group.setToolTip(
+            "Select which window to capture text from.\n"
+            "Only the selected window's content will be used for OCR – overlapping windows are ignored."
+        )
+        self.areas_layout.addWidget(self.capture_window_group)
+        self.capture_window_layout = QHBoxLayout(self.capture_window_group)
+        self.capture_window_layout.setSpacing(8)
+
+        self.capture_window_label = QLabel("Window:")
+        self.capture_window_label.setToolTip("Choose the target window whose content will be captured for translation")
+        self.capture_window_layout.addWidget(self.capture_window_label)
+
+        self.capture_window_combo = QComboBox()
+        self.capture_window_combo.setMinimumWidth(250)
+        self.capture_window_combo.setToolTip("Select the window to capture")
+        self.capture_window_combo.currentIndexChanged.connect(self._on_capture_window_changed)
+        self.capture_window_layout.addWidget(self.capture_window_combo, stretch=1)
+
+        self.capture_window_refresh_button = QPushButton("🔄 Refresh")
+        self.capture_window_refresh_button.setToolTip("Refresh the list of open windows")
+        self.capture_window_refresh_button.clicked.connect(self._refresh_window_list)
+        self.capture_window_layout.addWidget(self.capture_window_refresh_button)
+
+        # Populate the window list
+        self._refresh_window_list()
+        # --- End Capture Window selector ---
+
+        # --- Dictionary (CSV) group ---
+        self.dict_group = QGroupBox("📖 Dictionary (CSV)")
+        self.dict_group.setStyleSheet(
+            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: {self.frame_bg}; padding-top: 10px; }}"
+            f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; }}"
+        )
+        self.dict_group.setToolTip(
+            "Load a CSV file with 'en' and 'vi' columns to use as a translation dictionary.\n"
+            "Matched entries bypass the translation API (EN→VI only)."
+        )
+        self.areas_layout.addWidget(self.dict_group)
+        self.dict_layout = QHBoxLayout(self.dict_group)
+        self.dict_layout.setSpacing(8)
+        self.dict_layout.setContentsMargins(10, 15, 10, 10)
+
+        self.dict_load_button = QPushButton("📂 Load CSV…")
+        self.dict_load_button.setToolTip("Select a CSV file containing 'en' and 'vi' columns")
+        self.dict_load_button.clicked.connect(self._load_csv_dictionary)
+        self.dict_layout.addWidget(self.dict_load_button)
+
+        self.dict_clear_button = QPushButton("🗑 Clear")
+        self.dict_clear_button.setToolTip("Clear the loaded dictionary")
+        self.dict_clear_button.clicked.connect(self._clear_csv_dictionary)
+        self.dict_clear_button.setEnabled(False)
+        self.dict_layout.addWidget(self.dict_clear_button)
+
+        self.dict_status_label = QLabel("Not loaded")
+        self.dict_status_label.setToolTip("Status of the CSV dictionary")
+        self.dict_layout.addWidget(self.dict_status_label, stretch=1)
+        # --- End Dictionary (CSV) group ---
+
         self.areas_tree = QTreeWidget()
         self.areas_tree.setHeaderLabels(["Name", "Position", "Size", "Action"])
         self.areas_tree.setStyleSheet(f"background-color: {self.frame_bg};")
@@ -819,7 +1018,9 @@ class MainWindow(QMainWindow):
                     self.hotkey_apply_button, self.add_area_hotkey_apply_button,
                     self.tesseract_browse_button, self.tesseract_test_button,
                     self.libretranslate_test_button, self.libretranslate_tesseract_browse_button,
-                    self.libretranslate_tesseract_test_button]:
+                    self.libretranslate_tesseract_test_button,
+                    self.capture_window_refresh_button,
+                    self.dict_load_button, self.dict_clear_button]:
             btn.setStyleSheet(
                 f"QPushButton {{ background-color: {self.button_bg}; color: {self.button_fg}; padding: 6px 12px; border-radius: 4px; font-weight: 500; }}"
                 f"QPushButton:hover {{ background-color: {self.secondary_color}; }}"
@@ -837,6 +1038,121 @@ class MainWindow(QMainWindow):
         self.language_code_to_name = {}
         self.language_name_to_code = {}
 
+    # --- Capture window helpers ---
+
+    def _refresh_window_list(self):
+        """Refresh the capture window combobox with currently open windows."""
+        try:
+            self.capture_window_combo.blockSignals(True)
+            previous_hwnd = self.selected_capture_hwnd
+            self.capture_window_combo.clear()
+            self.capture_window_combo.addItem("-- Select a window --", None)
+
+            windows = list_visible_windows(exclude_own_pid=True)
+            saved_title = self.config_manager.get_capture_window_title()
+            match_index = 0
+
+            for i, winfo in enumerate(windows):
+                label = f"{winfo.title}  (pid:{winfo.pid})"
+                self.capture_window_combo.addItem(label, winfo.hwnd)
+                # Try to re-select previous or saved window
+                if previous_hwnd and winfo.hwnd == previous_hwnd:
+                    match_index = i + 1
+                elif match_index == 0 and saved_title and winfo.title == saved_title:
+                    match_index = i + 1
+
+            self.capture_window_combo.setCurrentIndex(match_index)
+            self.capture_window_combo.blockSignals(False)
+            self._on_capture_window_changed(match_index)
+            logger.info(f"Window list refreshed: {len(windows)} windows found, selected index={match_index}")
+        except Exception as e:
+            logger.error(f"Error refreshing window list: {e}", exc_info=True)
+            self.capture_window_combo.blockSignals(False)
+
+    def _on_capture_window_changed(self, index: int):
+        """Handle capture window combobox selection change."""
+        hwnd = self.capture_window_combo.currentData()
+        self.selected_capture_hwnd = hwnd
+        if hwnd:
+            title = self.capture_window_combo.currentText().split("  (pid:")[0]
+            self.config_manager.set_capture_window_title(title)
+            self.config_manager.set_capture_window_hwnd(str(hwnd))
+            logger.info(f"Capture window selected: hwnd={hwnd}, title='{title}'")
+        else:
+            logger.info("No capture window selected")
+
+    def _get_selected_capture_hwnd(self) -> Optional[int]:
+        """Return the currently selected capture window hwnd, or None."""
+        return self.selected_capture_hwnd
+
+    # --- End capture window helpers ---
+
+    # --- Dictionary (CSV) helpers ---
+
+    def _load_csv_dictionary(self):
+        """Open a file dialog to select a CSV file and load it into the TextProcessor dictionary."""
+        if self.text_processor is None:
+            QMessageBox.warning(
+                self,
+                "Translation Not Available",
+                "Translation service is not initialized. Please fix the translation settings (e.g. API key) and restart the application."
+            )
+            return
+        filepath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select CSV Dictionary File",
+            "",
+            "CSV files (*.csv);;All files (*.*)"
+        )
+        if not filepath:
+            return  # user cancelled
+
+        try:
+            entries, total_rows, skipped_rows = parse_csv_dictionary(filepath)
+            if not entries:
+                QMessageBox.warning(
+                    self,
+                    "Dictionary Empty",
+                    f"No valid entries found in the CSV file.\n"
+                    f"Total rows: {total_rows}, Skipped: {skipped_rows}\n\n"
+                    "Make sure the file has at least two columns (en, vi)."
+                )
+                return
+
+            loaded_count = self.text_processor.set_dictionary(entries)
+            self.dict_clear_button.setEnabled(True)
+            status_msg = f"✅ {loaded_count} entries"
+            if skipped_rows:
+                status_msg += f" ({skipped_rows} skipped)"
+            self.dict_status_label.setText(status_msg)
+            self.dict_status_label.setToolTip(
+                f"File: {filepath}\n"
+                f"Total rows: {total_rows}\n"
+                f"Loaded: {loaded_count}\n"
+                f"Skipped: {skipped_rows}"
+            )
+            logger.info(f"CSV dictionary loaded: {loaded_count} entries from '{filepath}' "
+                        f"(total_rows={total_rows}, skipped={skipped_rows})")
+        except Exception as e:
+            logger.error(f"Error loading CSV dictionary: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Dictionary Load Error",
+                f"Failed to load the CSV file:\n{e}"
+            )
+
+    def _clear_csv_dictionary(self):
+        """Clear the loaded dictionary from TextProcessor."""
+        if self.text_processor is None:
+            return
+        self.text_processor.clear_dictionary()
+        self.dict_clear_button.setEnabled(False)
+        self.dict_status_label.setText("Not loaded")
+        self.dict_status_label.setToolTip("Status of the CSV dictionary")
+        logger.info("CSV dictionary cleared by user")
+
+    # --- End Dictionary (CSV) helpers ---
+
     def load_saved_areas(self):
         """Load saved areas from configuration."""
         try:
@@ -847,15 +1163,34 @@ class MainWindow(QMainWindow):
             if areas:
                 for area_id, area_data in areas.items():
                     logger.info(f"Loading area {area_id}: {area_data}")
-                    item = QTreeWidgetItem([
-                        f"Area {area_id}",
-                        f"X: {area_data['x']}, Y: {area_data['y']}",
-                        f"W: {area_data['width']}, H: {area_data['height']}",
-                        ""  # Empty for Action column, will be filled with button
-                    ])
-                    item.setData(0, Qt.UserRole, area_id)
+                    if area_data.get('is_pct', False):
+                        # Pct-based area – show percentages
+                        x_pct = area_data['x_pct']
+                        y_pct = area_data['y_pct']
+                        w_pct = area_data['w_pct']
+                        h_pct = area_data['h_pct']
+                        item = QTreeWidgetItem([
+                            f"Area {area_id}",
+                            f"X: {x_pct*100:.1f}%, Y: {y_pct*100:.1f}%",
+                            f"W: {w_pct*100:.1f}%, H: {h_pct*100:.1f}%",
+                            ""
+                        ])
+                        # Store pct data on the item
+                        item.setData(0, Qt.UserRole, area_id)
+                        item.setData(1, Qt.UserRole, {'x_pct': x_pct, 'y_pct': y_pct, 'w_pct': w_pct, 'h_pct': h_pct, 'is_pct': True})
+                    else:
+                        # Legacy absolute area
+                        item = QTreeWidgetItem([
+                            f"Area {area_id}",
+                            f"X: {area_data['x']}, Y: {area_data['y']}",
+                            f"W: {area_data['width']}, H: {area_data['height']}",
+                            ""
+                        ])
+                        item.setData(0, Qt.UserRole, area_id)
+                        item.setData(1, Qt.UserRole, {'x': area_data['x'], 'y': area_data['y'],
+                                                       'width': area_data['width'], 'height': area_data['height'],
+                                                       'is_pct': False})
                     self.areas_tree.addTopLevelItem(item)
-                    # Add action button for this area
                     self._add_action_button(item, area_id)
             self.area_selected = self.areas_tree.topLevelItemCount() > 0
             self.update_button_states()
@@ -1034,39 +1369,73 @@ class MainWindow(QMainWindow):
     def add_area(self):
         """Add a new translation area."""
         try:
+            # Require a capture window to be selected
+            hwnd = self._get_selected_capture_hwnd()
+            if not hwnd or not is_window_valid(hwnd):
+                QMessageBox.warning(
+                    self, "No Capture Window",
+                    "Please select a valid capture window before adding an area.\n"
+                    "Use the 'Capture Window' dropdown and click 'Refresh' if needed."
+                )
+                return
+
             self.hide()
             screenshot, region = capture_screen_region()
             if region:
-                x, y, w, h = region
+                sel_x, sel_y, sel_w, sel_h = region
+
+                # Convert screen-absolute selection to window-client percentages
+                client_info = get_client_origin_and_size(hwnd)
+                if client_info is None:
+                    show_error_message(self, "Error", "Could not get the capture window's client area. The window may have been closed.")
+                    return
+                origin_x, origin_y, client_w, client_h = client_info
+
+                x_pct = (sel_x - origin_x) / client_w
+                y_pct = (sel_y - origin_y) / client_h
+                w_pct = sel_w / client_w
+                h_pct = sel_h / client_h
+
+                # Clamp to [0, 1]
+                x_pct = max(0.0, min(x_pct, 1.0))
+                y_pct = max(0.0, min(y_pct, 1.0))
+                w_pct = max(0.0, min(w_pct, 1.0 - x_pct))
+                h_pct = max(0.0, min(h_pct, 1.0 - y_pct))
+
+                if w_pct <= 0 or h_pct <= 0:
+                    show_error_message(self, "Invalid Selection",
+                                       "The selected region does not overlap with the capture window's client area.\n"
+                                       "Please select a region inside the target window.")
+                    return
+
                 # Get existing area IDs
                 existing_ids = set()
                 for i in range(self.areas_tree.topLevelItemCount()):
                     item = self.areas_tree.topLevelItem(i)
                     existing_ids.add(int(item.data(0, Qt.UserRole)))
-                
+
                 # Find the next available ID
                 new_id = 1
                 while new_id in existing_ids:
                     new_id += 1
-                
+
                 area_id = str(new_id)
                 item = QTreeWidgetItem([
                     f"Area {area_id}",
-                    f"X: {x}, Y: {y}",
-                    f"W: {w}, H: {h}",
-                    ""  # Empty for Action column, will be filled with button
+                    f"X: {x_pct*100:.1f}%, Y: {y_pct*100:.1f}%",
+                    f"W: {w_pct*100:.1f}%, H: {h_pct*100:.1f}%",
+                    ""
                 ])
                 item.setData(0, Qt.UserRole, area_id)
+                item.setData(1, Qt.UserRole, {'x_pct': x_pct, 'y_pct': y_pct, 'w_pct': w_pct, 'h_pct': h_pct, 'is_pct': True})
                 self.areas_tree.addTopLevelItem(item)
-                # Add action button for this area
                 self._add_action_button(item, area_id)
-                self.save_area_config(area_id, x, y, w, h)
+                self.config_manager.save_area_pct(area_id, x_pct, y_pct, w_pct, h_pct)
                 self.area_selected = True
                 self.update_button_states()
-                
+
                 # Select the newly added area and automatically start translation
                 self.areas_tree.setCurrentItem(item)
-                # Use QTimer.singleShot to ensure UI is updated before starting translation
                 QTimer.singleShot(100, self.start_translation)
         except Exception as e:
             logger.error(f"Error adding area: {str(e)}", exc_info=True)
@@ -1149,20 +1518,47 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "Please select an area to translate")
             return
         area_id = selected[0].data(0, Qt.UserRole)
-        
-        # Parse position (X: x, Y: y)
-        position_text = selected[0].text(1)
-        x = int(position_text.split('X:')[1].split(',')[0].strip())
-        y = int(position_text.split('Y:')[1].strip())
-        
-        # Parse size (W: w, H: h)
-        size_text = selected[0].text(2)
-        w = int(size_text.split('W:')[1].split(',')[0].strip())
-        h = int(size_text.split('H:')[1].strip())
-        
+
+        # Get area data stored on the item (either pct or legacy absolute)
+        area_data = selected[0].data(1, Qt.UserRole)
+
+        # Determine the capture window hwnd
+        capture_hwnd = self._get_selected_capture_hwnd()
+
+        # Resolve the initial screen-absolute region
+        if area_data and area_data.get('is_pct', False):
+            x_pct = area_data['x_pct']
+            y_pct = area_data['y_pct']
+            w_pct = area_data['w_pct']
+            h_pct = area_data['h_pct']
+
+            if not capture_hwnd or not is_window_valid(capture_hwnd):
+                QMessageBox.warning(self, "No Capture Window",
+                                    "Please select a valid capture window to start translation for a pct-based area.")
+                return
+
+            client_info = get_client_origin_and_size(capture_hwnd)
+            if client_info is None:
+                show_error_message(self, "Error", "Could not get the capture window's client area.")
+                return
+            origin_x, origin_y, client_w, client_h = client_info
+            x = int(origin_x + x_pct * client_w)
+            y = int(origin_y + y_pct * client_h)
+            w = int(w_pct * client_w)
+            h = int(h_pct * client_h)
+        else:
+            # Legacy absolute – parse from text
+            position_text = selected[0].text(1)
+            x = int(position_text.split('X:')[1].split(',')[0].strip())
+            y = int(position_text.split('Y:')[1].strip())
+            size_text = selected[0].text(2)
+            w = int(size_text.split('W:')[1].split(',')[0].strip())
+            h = int(size_text.split('H:')[1].strip())
+            x_pct = y_pct = w_pct = h_pct = None
+
         try:
             logger.info(f"Starting translation for area {area_id} at ({x}, {y}) with size {w}x{h}")
-            
+
             if area_id in self.translation_windows:
                 if self.translation_windows[area_id].isVisible():
                     self.translation_windows[area_id].raise_()
@@ -1170,7 +1566,7 @@ class MainWindow(QMainWindow):
                     return
                 else:
                     del self.translation_windows[area_id]
-            
+
             settings = {
                 'font_family': self.font_combo.currentText(),
                 'font_size': self.font_size_edit.text(),
@@ -1188,34 +1584,42 @@ class MainWindow(QMainWindow):
                 'llm_studio_url': self.config_manager.get_llm_studio_url()
             }
             logger.info(f"Translation settings: {settings}")
-            
+
             logger.info(f"Creating TranslationWindow with text_processor: {hasattr(self, 'text_processor')}")
             translation_window = TranslationWindow(
-                self.add_area, 
-                settings, 
-                self.config_manager, 
+                self.add_area,
+                settings,
+                self.config_manager,
                 area_id,
-                self.text_processor  # Pass the text_processor
+                self.text_processor
             )
+
+            # Provide window-capture info
+            translation_window.capture_hwnd = capture_hwnd
+            if x_pct is not None:
+                translation_window.area_pct = (x_pct, y_pct, w_pct, h_pct)
+            else:
+                translation_window.area_pct = None
+
             translation_window.set_region((x, y, w, h))
             translation_window.running = True
-            translation_window.is_capturing = True  # Enable capturing automatically
-            translation_window.update_capture_button_state()  # Update button state
+            translation_window.is_capturing = True
+            translation_window.update_capture_button_state()
             translation_window.timer.start(1000)
             self.translation_windows[area_id] = translation_window
-            
+
             # Connect the close handler to the translation window
-            translation_window.area_id = area_id  # Store area_id for reference
+            translation_window.area_id = area_id
             translation_window.main_window_close_handler = self.handle_translation_window_close_direct
-            
+
             translation_window.show()
-            
+
             # Disable settings when translation window is opened
             self.update_settings_state(False)
-            
+
             # Update action button state to show "Stop"
             self._update_action_button(area_id, running=True)
-            
+
             logger.info("Translation window created and shown")
         except Exception as e:
             logger.error(f"Error in start_translation: {str(e)}", exc_info=True)
@@ -1413,6 +1817,12 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'libretranslate_tesseract_test_button'):
                 self.libretranslate_tesseract_test_button.setEnabled(enabled)
             
+            # Capture window settings
+            if hasattr(self, 'capture_window_combo'):
+                self.capture_window_combo.setEnabled(enabled)
+            if hasattr(self, 'capture_window_refresh_button'):
+                self.capture_window_refresh_button.setEnabled(enabled)
+
             # Area management buttons - always enabled
             if hasattr(self, 'add_button'):
                 self.add_button.setEnabled(True)
@@ -1899,8 +2309,12 @@ class MainWindow(QMainWindow):
                 mode = 'google'
             elif mode_index == 1:
                 mode = 'local'
-            else:  # mode_index == 2
+            elif mode_index == 2:
                 mode = 'libretranslate'
+            elif mode_index == 3:
+                mode = 'gemini'
+            else:
+                mode = 'google'
             self.config_manager.set_translation_mode(mode)
             self.update_translation_mode_ui()
             logger.info(f"Translation mode changed to: {mode}")
@@ -1913,6 +2327,7 @@ class MainWindow(QMainWindow):
             mode = self.config_manager.get_translation_mode()
             is_local_mode = (mode == 'local')
             is_libretranslate_mode = (mode == 'libretranslate')
+            is_gemini_mode = (mode == 'gemini')
             
             # Show/hide LLM Studio settings (if it exists)
             if hasattr(self, 'llm_studio_group'):
@@ -1922,12 +2337,16 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'libretranslate_group'):
                 self.libretranslate_group.setVisible(is_libretranslate_mode)
             
+            # Show/hide Gemini settings (if it exists)
+            if hasattr(self, 'gemini_group'):
+                self.gemini_group.setVisible(is_gemini_mode)
+            
             # Show/hide Google Cloud credentials (if it exists)
             if hasattr(self, 'credentials_group'):
-                self.credentials_group.setVisible(not is_local_mode and not is_libretranslate_mode)
+                self.credentials_group.setVisible(not is_local_mode and not is_libretranslate_mode and not is_gemini_mode)
             
             # Update Tesseract path field visibility based on OCR mode
-            if is_local_mode or is_libretranslate_mode:
+            if is_local_mode or is_libretranslate_mode or is_gemini_mode:
                 ocr_mode = self.config_manager.get_ocr_mode()
                 is_tesseract_mode = (ocr_mode == 'tesseract')
                 if hasattr(self, 'tesseract_path_layout'):
@@ -1938,6 +2357,11 @@ class MainWindow(QMainWindow):
                 if hasattr(self, 'libretranslate_tesseract_path_layout'):
                     for i in range(self.libretranslate_tesseract_path_layout.count()):
                         widget = self.libretranslate_tesseract_path_layout.itemAt(i).widget()
+                        if widget:
+                            widget.setVisible(is_tesseract_mode)
+                if hasattr(self, 'gemini_tesseract_path_layout'):
+                    for i in range(self.gemini_tesseract_path_layout.count()):
+                        widget = self.gemini_tesseract_path_layout.itemAt(i).widget()
                         if widget:
                             widget.setVisible(is_tesseract_mode)
         except Exception as e:
@@ -2289,6 +2713,181 @@ class MainWindow(QMainWindow):
                 logger.info(f"LibreTranslate URL changed to: {url}")
         except Exception as e:
             logger.error(f"Error changing LibreTranslate URL: {str(e)}", exc_info=True)
+    
+    def on_gemini_api_key_changed(self):
+        """Handle Gemini API key change."""
+        try:
+            api_key = self.gemini_api_key_edit.text()
+            if api_key:
+                self.config_manager.set_gemini_api_key(api_key)
+                logger.info("Gemini API key updated")
+        except Exception as e:
+            logger.error(f"Error changing Gemini API key: {str(e)}", exc_info=True)
+    
+    def on_gemini_model_changed(self):
+        """Handle Gemini model change."""
+        try:
+            model = self.gemini_model_edit.text().strip()
+            if model:
+                self.config_manager.set_gemini_model(model)
+                logger.info(f"Gemini model changed to: {model}")
+        except Exception as e:
+            logger.error(f"Error changing Gemini model: {str(e)}", exc_info=True)
+    
+    def toggle_gemini_api_key_visibility(self):
+        """Toggle Gemini API key visibility."""
+        if self.gemini_api_key_edit.echoMode() == QLineEdit.Password:
+            self.gemini_api_key_edit.setEchoMode(QLineEdit.Normal)
+            self.gemini_show_key_button.setText("Hide")
+        else:
+            self.gemini_api_key_edit.setEchoMode(QLineEdit.Password)
+            self.gemini_show_key_button.setText("Show")
+    
+    def install_gemini_package(self):
+        """Install google-generativeai package using pip."""
+        try:
+            import subprocess
+            import sys
+            from PyQt5.QtWidgets import QMessageBox
+            from PyQt5.QtCore import QThread, pyqtSignal
+            
+            class InstallThread(QThread):
+                finished = pyqtSignal(bool, str)
+                
+                def run(self):
+                    try:
+                        # Run pip install
+                        result = subprocess.run(
+                            [sys.executable, "-m", "pip", "install", "google-generativeai"],
+                            capture_output=True,
+                            text=True,
+                            timeout=300  # 5 minute timeout
+                        )
+                        
+                        if result.returncode == 0:
+                            self.finished.emit(True, "Package installed successfully!")
+                        else:
+                            error_msg = result.stderr or result.stdout or "Unknown error"
+                            self.finished.emit(False, f"Installation failed:\n{error_msg}")
+                    except subprocess.TimeoutExpired:
+                        self.finished.emit(False, "Installation timed out. Please try installing manually:\npip install google-generativeai")
+                    except Exception as e:
+                        self.finished.emit(False, f"Error during installation: {str(e)}")
+            
+            # Disable button during installation
+            self.gemini_install_button.setEnabled(False)
+            self.gemini_install_button.setText("Installing...")
+            if hasattr(self, 'gemini_install_status_label'):
+                self.gemini_install_status_label.setText("Installing google-generativeai package... Please wait.")
+            
+            # Create and start installation thread
+            self.install_thread = InstallThread()
+            
+            def on_install_finished(success, message):
+                self.gemini_install_button.setEnabled(True)
+                self.gemini_install_button.setText("📥 Install Package")
+                
+                if hasattr(self, 'gemini_install_status_label'):
+                    if success:
+                        self.gemini_install_status_label.setText("✓ Installation successful! Please restart the application.")
+                        self.gemini_install_status_label.setStyleSheet("color: #00aa00; font-size: 9pt;")
+                        # Update installed status
+                        self.gemini_package_installed = True
+                        # Hide install button and label after successful installation
+                        def hide_install_widgets():
+                            if hasattr(self, 'gemini_install_layout'):
+                                for i in range(self.gemini_install_layout.count()):
+                                    item = self.gemini_install_layout.itemAt(i)
+                                    if item and item.widget():
+                                        item.widget().setVisible(False)
+                            if hasattr(self, 'gemini_install_status_label'):
+                                self.gemini_install_status_label.setVisible(False)
+                        QTimer.singleShot(2000, hide_install_widgets)
+                    else:
+                        self.gemini_install_status_label.setText(f"✗ {message}")
+                        self.gemini_install_status_label.setStyleSheet("color: #ff0000; font-size: 9pt;")
+                
+                QMessageBox.information(
+                    self,
+                    "Installation Complete" if success else "Installation Failed",
+                    message + ("\n\nPlease restart the application to use Gemini translation." if success else "")
+                )
+            
+            self.install_thread.finished.connect(on_install_finished)
+            self.install_thread.start()
+            
+        except Exception as e:
+            logger.error(f"Error installing Gemini package: {str(e)}", exc_info=True)
+            show_error_message(self, "Error", f"Failed to install package: {str(e)}")
+            if hasattr(self, 'gemini_install_button'):
+                self.gemini_install_button.setEnabled(True)
+                self.gemini_install_button.setText("📥 Install Package")
+    
+    def test_gemini(self):
+        """Test if Gemini API is accessible."""
+        try:
+            # Check if package is installed first
+            try:
+                import google.generativeai as genai
+            except ImportError:
+                QMessageBox.warning(
+                    self,
+                    "Package Not Installed",
+                    "google-generativeai package is not installed.\n\n"
+                    "Please click the 'Install Package' button to install it first."
+                )
+                return
+            
+            from src.translator.gemini_translator import GeminiTranslator
+            from PyQt5.QtWidgets import QMessageBox
+            
+            api_key = self.gemini_api_key_edit.text() or self.config_manager.get_gemini_api_key()
+            if not api_key:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    "Please enter a Gemini API key.\n\nGet one from: https://makersuite.google.com/app/apikey"
+                )
+                return
+            
+            try:
+                # Use current text box value (may not be saved yet)
+                gemini_model = self.gemini_model_edit.text().strip() if hasattr(self, 'gemini_model_edit') and self.gemini_model_edit.text().strip() else self.config_manager.get_gemini_model()
+                translator = GeminiTranslator(api_key, model_name=gemini_model)
+                if translator.test_connection():
+                    QMessageBox.information(
+                        self,
+                        "Test Successful",
+                        f"Gemini connection successful!\n\n"
+                        f"API key is valid and working."
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Test Failed",
+                        "Gemini connection test failed.\n\n"
+                        "Please check your API key and try again."
+                    )
+            except ImportError as e:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    f"Gemini translator not available.\n\n"
+                    f"Please install google-generativeai:\n"
+                    f"pip install google-generativeai\n\n"
+                    f"Error: {str(e)}"
+                )
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Test Failed",
+                    f"Failed to connect to Gemini API.\n\n"
+                    f"Error: {str(e)}\n\n"
+                    f"Please check your API key and try again."
+                )
+        except Exception as e:
+            logger.error(f"Error testing Gemini connection: {str(e)}", exc_info=True)
+            show_error_message(self, "Error", f"Failed to test Gemini connection: {str(e)}")
     
     def test_libretranslate(self):
         """Test if LibreTranslate API is accessible."""

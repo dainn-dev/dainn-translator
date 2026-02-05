@@ -15,6 +15,7 @@ from PyQt5.QtCore import Qt, QTimer, QPoint, QCoreApplication, QAbstractNativeEv
 from PyQt5.QtGui import QFont, QColor, QKeySequence
 from src.config_manager import ConfigManager
 from src.text_processing import TextProcessor
+from src.window_capture import capture_window_client, get_client_origin_and_size, is_window_valid
 from typing import Tuple, Optional, Callable, Dict, List
 import os
 import ctypes
@@ -205,6 +206,11 @@ class TranslationWindow(QMainWindow):
         # Initialize translation cache and rate limiter
         self.translation_cache = TranslationCache(max_size=None, expiration_minutes=10/60)  # Unlimited cache with 10s expiration
         self.rate_limiter = RateLimiter(max_calls=None, time_window=None)  # Unlimited requests
+
+        # Window-based capture (set externally by MainWindow before timer starts)
+        self.capture_hwnd: Optional[int] = None   # target window handle
+        self.area_pct: Optional[Tuple[float, float, float, float]] = None  # (x_pct, y_pct, w_pct, h_pct)
+        self._last_overlay_geometry: Optional[Tuple[int, int, int, int]] = None  # track overlay position
         
         # Set minimum size
         self.setMinimumSize(300, 200)
@@ -719,6 +725,66 @@ class TranslationWindow(QMainWindow):
                 return
             self.toggle_capture()
 
+    def _capture_roi(self) -> Optional[np.ndarray]:
+        """
+        Capture the region of interest.
+        If a capture_hwnd and area_pct are available, uses PrintWindow to capture
+        only the target window's client area (no overlay contamination) and crops
+        by percentage. Also repositions the overlay to follow the window.
+        Falls back to pyautogui.screenshot for legacy absolute regions.
+        """
+        if self.capture_hwnd and self.area_pct and is_window_valid(self.capture_hwnd):
+            x_pct, y_pct, w_pct, h_pct = self.area_pct
+            client_info = get_client_origin_and_size(self.capture_hwnd)
+            if client_info is None:
+                logger.warning("Capture window client info unavailable, falling back to screen capture")
+                return self._capture_roi_screen()
+
+            origin_x, origin_y, client_w, client_h = client_info
+
+            # Reposition overlay to follow the window
+            new_x = int(origin_x + x_pct * client_w)
+            new_y = int(origin_y + y_pct * client_h)
+            new_w = int(w_pct * client_w)
+            new_h = int(h_pct * client_h)
+            new_geom = (new_x, new_y, new_w, new_h)
+            if new_geom != self._last_overlay_geometry:
+                self._last_overlay_geometry = new_geom
+                self.region = new_geom
+                self.setGeometry(new_x, new_y, new_w, new_h)
+                self.name_label.setFixedWidth(max(new_w - 40, 60))
+                self.dialogue_label.setFixedWidth(max(new_w - 40, 60))
+
+            # Capture the full window client area via PrintWindow
+            full_img = capture_window_client(self.capture_hwnd)
+            if full_img is None:
+                logger.warning("PrintWindow capture failed, falling back to screen capture")
+                return self._capture_roi_screen()
+
+            # Crop by pct
+            crop_x = int(x_pct * client_w)
+            crop_y = int(y_pct * client_h)
+            crop_w = int(w_pct * client_w)
+            crop_h = int(h_pct * client_h)
+            # Clamp to image bounds
+            crop_x = max(0, min(crop_x, full_img.shape[1] - 1))
+            crop_y = max(0, min(crop_y, full_img.shape[0] - 1))
+            crop_w = max(1, min(crop_w, full_img.shape[1] - crop_x))
+            crop_h = max(1, min(crop_h, full_img.shape[0] - crop_y))
+
+            roi = full_img[crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
+            return roi
+        else:
+            return self._capture_roi_screen()
+
+    def _capture_roi_screen(self) -> Optional[np.ndarray]:
+        """Fallback: capture a region directly from the screen using pyautogui."""
+        if not self.region:
+            return None
+        x, y, w, h = self.region
+        screenshot = pyautogui.screenshot(region=(x, y, w, h))
+        return np.array(screenshot)
+
     def continuous_translate(self):
         """Continuously translate screen region text with optimizations."""
         if not self.running or not self.region or not self.text_processor or self.processing or not self.is_capturing:
@@ -729,18 +795,17 @@ class TranslationWindow(QMainWindow):
 
         try:
             self.processing = True
-            x, y, w, h = self.region
-            logger.debug(f"Capturing screen region: ({x}, {y}, {w}, {h})")
+            logger.debug(f"Capturing region: {self.region}")
             
-            # Capture screen in a separate thread
-            def capture_screen():
-                screenshot = pyautogui.screenshot(region=(x, y, w, h))
-                return np.array(screenshot)
-            
-            # Use ThreadPoolExecutor for screen capture
+            # Capture ROI (window-based or screen fallback) in a thread
             with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(capture_screen)
+                future = executor.submit(self._capture_roi)
                 screenshot = future.result()
+
+            if screenshot is None or screenshot.size == 0:
+                logger.warning("Capture returned empty image")
+                self.processing = False
+                return
             
             # Check for frame changes before calling Vision API
             current_frame_hash = self.get_frame_hash(screenshot)
@@ -789,27 +854,21 @@ class TranslationWindow(QMainWindow):
                 self.vision_counter_label.setText(f"Vision API: {self.text_processor.vision_api_calls_today} requests")
             
             # Check for auto-pause feature
-            # Note: This works for both Google Cloud and Local (Tesseract) translation modes
-            # because it checks text detection results regardless of the detection method used
             auto_pause_enabled = self.settings.get('auto_pause_enabled', False)
             auto_pause_threshold = self.settings.get('auto_pause_threshold', 5)
             
             if not text or text.strip() == "":
-                # No text detected (works for both Vision API and Tesseract OCR)
                 self.consecutive_no_text_captures += 1
                 
-                # Check if we should auto-pause
                 if auto_pause_enabled and self.consecutive_no_text_captures >= auto_pause_threshold:
                     if not self.auto_paused:
                         self.auto_paused = True
                         self.is_capturing = False
                         logger.info(f"Auto-paused after {self.consecutive_no_text_captures} captures without text")
-                        # Update UI to show paused state
                         self.update_auto_pause_status()
                     self.processing = False
                     return
             else:
-                # Text detected, reset counter and resume if auto-paused
                 if self.auto_paused:
                     self.auto_paused = False
                     self.is_capturing = True
@@ -857,13 +916,14 @@ class TranslationWindow(QMainWindow):
                     self.settings['source_language']
                 )
                 logger.debug(f"Translation completed: '{translated[:50] if translated else '(empty)'}...'")
-                # Only update Translation API counter if we actually made an API call
                 if not cached_translation:
                     translation_mode = self.config_manager.get_translation_mode()
                     if translation_mode == 'local':
                         self.translation_counter_label.setText(f"LLM: Ready")
                     elif translation_mode == 'libretranslate':
                         self.translation_counter_label.setText(f"LibreTranslate: Ready")
+                    elif translation_mode == 'gemini':
+                        self.translation_counter_label.setText(f"Gemini: Ready")
                     else:
                         self.translation_counter_label.setText(f"Translation API: {self.text_processor.translation_api_calls_today} requests")
                 return translated
@@ -877,7 +937,6 @@ class TranslationWindow(QMainWindow):
                 logger.warning(f"Translation returned empty text. Original: '{text[:50]}...'")
                 translated_text = text  # Fallback to original text
             
-            # Check if translation is the same as original (might indicate failure)
             if translated_text == text:
                 logger.debug(f"Translation same as original (might be cached or failed): '{text[:50]}...'")
             
