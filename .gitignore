@@ -10,3 +10,6 @@ __pycache__/
 trans.log
 .idea/
 config/
+.claude/settings.local.json
+.env
+.mcp.json
