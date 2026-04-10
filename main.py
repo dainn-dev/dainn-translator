@@ -72,6 +72,8 @@ def main():
         libretranslate_translator = None
         gemini_translator = None
 
+        app = QApplication(sys.argv)
+
         if translation_mode == 'google':
             # Google Cloud mode
             credentials_path = config_manager.get_credentials_path()
@@ -80,7 +82,6 @@ def main():
             if not validate_credentials(credentials_path):
                 logger.warning("No valid Google Cloud credentials found. Please set up credentials in the settings.")
                 # Create main window anyway to allow user to set up credentials
-                app = QApplication(sys.argv)
                 main_window = MainWindow(None)  # Pass None as text_processor
                 main_window.show()
                 return app.exec()
@@ -100,10 +101,10 @@ def main():
             # LibreTranslate mode
             logger.info("Initializing LibreTranslate translator...")
             from src.translator.libretranslate_translator import LibreTranslateTranslator
-            
+
             libretranslate_url = config_manager.get_libretranslate_url()
             libretranslate_translator = LibreTranslateTranslator(libretranslate_url)
-            
+
             # Test connection
             if libretranslate_translator.test_connection():
                 logger.info("LibreTranslate connection successful")
@@ -113,20 +114,19 @@ def main():
             # Gemini mode
             logger.info("Initializing Gemini translator...")
             from src.translator.gemini_translator import GeminiTranslator
-            
+
             gemini_api_key = config_manager.get_gemini_api_key()
             if not gemini_api_key:
                 logger.warning("No Gemini API key found. Please set up API key in the settings.")
                 # Create main window anyway to allow user to set up API key
-                app = QApplication(sys.argv)
                 main_window = MainWindow(None, config_manager)  # Pass None as text_processor
                 main_window.show()
                 return app.exec()
-            
+
             try:
                 gemini_model = config_manager.get_gemini_model()
                 gemini_translator = GeminiTranslator(gemini_api_key, model_name=gemini_model)
-                
+
                 # Test connection
                 if gemini_translator.test_connection():
                     logger.info(f"Gemini connection successful with model: {gemini_model}")
@@ -135,7 +135,6 @@ def main():
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini translator: {str(e)}")
                 # Create main window anyway to allow user to fix the issue
-                app = QApplication(sys.argv)
                 main_window = MainWindow(None, config_manager)  # Pass None as text_processor
                 main_window.show()
                 return app.exec()
@@ -150,12 +149,12 @@ def main():
             vision_client=vision_client,
             llm_studio_translator=llm_studio_translator,
             libretranslate_translator=libretranslate_translator,
-            gemini_translator=gemini_translator
+            gemini_translator=gemini_translator,
+            config_manager=config_manager
         )
         logger.info("TextProcessor created successfully")
 
         logger.info("Creating MainWindow...")
-        app = QApplication(sys.argv)
         main_window = MainWindow(text_processor, config_manager)
         main_window.show()
         logger.info("MainWindow created successfully")
