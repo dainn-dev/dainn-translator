@@ -1,4 +1,5 @@
 import pyautogui
+from src.dx_capture import capture_screen_mss, MSS_AVAILABLE
 import numpy as np
 import logging
 from typing import Tuple, Optional
@@ -190,8 +191,12 @@ def capture_screen_region() -> Tuple[Optional[np.ndarray], Optional[Tuple[int, i
             
             if region:
                 x, y, w, h = region
-                screenshot = pyautogui.screenshot(region=(x, y, w, h))
-                screenshot = np.array(screenshot)
+                if MSS_AVAILABLE:
+                    screenshot = capture_screen_mss(x, y, w, h)
+                else:
+                    screenshot = np.array(pyautogui.screenshot(region=(x, y, w, h)))
+                if screenshot is None:
+                    return None, None
                 return screenshot, (x, y, w, h)
         
         selector.close()
