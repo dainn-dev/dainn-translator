@@ -2,8 +2,14 @@ from typing import Dict, List, Optional, Tuple
 import os
 import json
 from datetime import datetime
-from google.cloud import translate_v2 as translate
-from google.cloud import vision
+try:
+    from google.cloud import translate_v2 as translate
+    from google.cloud import vision
+    GOOGLE_CLOUD_AVAILABLE = True
+except ImportError:
+    translate = None
+    vision = None
+    GOOGLE_CLOUD_AVAILABLE = False
 import numpy as np
 from collections import OrderedDict
 from src.config_manager import ConfigManager
@@ -59,7 +65,8 @@ class TextProcessor:
                  llm_studio_translator: Optional['LLMStudioTranslator'] = None,
                  libretranslate_translator: Optional['LibreTranslateTranslator'] = None,
                  gemini_translator: Optional['GeminiTranslator'] = None,
-                 cache_size: int = None):
+                 cache_size: int = None,
+                 config_manager=None):
         logger.info("Initializing TextProcessor...")
         self.translate_client = translate_client
         self.vision_client = vision_client
@@ -72,8 +79,9 @@ class TextProcessor:
         self.translation_api_calls_today = 0
         self.vision_api_calls_today = 0
         self.last_quota_reset = datetime.now().date()
-        self.config_manager = ConfigManager()
+        self.config_manager = config_manager if config_manager is not None else ConfigManager()
         self.translation_history: List[Dict] = []
+        self._history_write_counter = 0
         # In-memory CSV dictionary (EN→VI), keyed by hash of normalized EN text
         self.dict_md5: Dict[str, str] = {}
         self.dict_sha1: Dict[str, str] = {}
@@ -505,6 +513,13 @@ class TextProcessor:
 
     def _save_translation_history(self):
         """Save translation history to file."""
+        self._history_write_counter += 1
+        # Trim to 500 entries (keep newest)
+        if len(self.translation_history) > 500:
+            self.translation_history = self.translation_history[-500:]
+        # Only flush to disk every 10 translations
+        if self._history_write_counter % 10 != 0:
+            return
         try:
             history_file = os.path.join(os.getenv('APPDATA'), 'DainnScreenTranslator', 'translation_history.json')
             with open(history_file, 'w', encoding='utf-8') as f:
