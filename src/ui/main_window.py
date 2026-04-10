@@ -980,8 +980,7 @@ class MainWindow(QMainWindow):
                     self.tesseract_browse_button, self.tesseract_test_button,
                     self.libretranslate_test_button, self.libretranslate_tesseract_browse_button,
                     self.libretranslate_tesseract_test_button,
-                    self.capture_window_refresh_button,
-                    self.dict_load_button, self.dict_clear_button]:
+                    self.capture_window_refresh_button]:
             btn.setStyleSheet(
                 f"QPushButton {{ background-color: {self.button_bg}; color: {self.button_fg}; padding: 6px 12px; border-radius: 4px; font-weight: 500; }}"
                 f"QPushButton:hover {{ background-color: {self.secondary_color}; }}"
