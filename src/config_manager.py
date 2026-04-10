@@ -275,10 +275,12 @@ class ConfigManager:
             if 'Areas' in self.config:
                 area_ids = set()
                 for key in self.config['Areas']:
-                    # Extract area id (everything before the first underscore-prefixed field)
-                    parts = key.split('_')
-                    area_id = parts[0]
-                    area_ids.add(area_id)
+                    # Extract area id by matching keys that end with the canonical first fields
+                    # Keys are formatted as {area_id}_x or {area_id}_x_pct
+                    if key.endswith('_x'):
+                        area_ids.add(key[:-2])
+                    elif key.endswith('_x_pct'):
+                        area_ids.add(key[:-6])
                 
                 for area_id in area_ids:
                     area = self.get_area(area_id)
