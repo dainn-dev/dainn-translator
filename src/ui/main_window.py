@@ -17,7 +17,6 @@ from src.ui.utils import validate_credentials, show_error_message
 from src.text_processing import TextProcessor
 from src.version_checker import VersionChecker
 from src.window_capture import list_visible_windows, get_client_origin_and_size, is_window_valid, IS_WINDOWS as WC_IS_WINDOWS
-from src.dictionary_utils import parse_csv_dictionary
 
 logger = logging.getLogger(__name__)
 
@@ -271,13 +270,6 @@ class MainWindow(QMainWindow):
         self.update_settings_state(True)
 
         self.text_processor = text_processor
-
-        # Disable dictionary controls when TextProcessor is not available (e.g. missing API key)
-        if self.text_processor is None:
-            self.dict_load_button.setEnabled(False)
-            self.dict_clear_button.setEnabled(False)
-            self.dict_status_label.setText("Unavailable (translation not initialized)")
-            self.dict_load_button.setToolTip("Translation service is not initialized. Fix settings and restart.")
 
         # Check for updates after a short delay to ensure the window is fully loaded
         QTimer.singleShot(2000, self.check_for_updates)
@@ -966,37 +958,6 @@ class MainWindow(QMainWindow):
         self._refresh_window_list()
         # --- End Capture Window selector ---
 
-        # --- Dictionary (CSV) group ---
-        self.dict_group = QGroupBox("📖 Dictionary (CSV)")
-        self.dict_group.setStyleSheet(
-            f"QGroupBox {{ font: 10pt 'Google Sans'; color: {self.text_color}; background-color: {self.frame_bg}; padding-top: 10px; }}"
-            f"QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 5px; }}"
-        )
-        self.dict_group.setToolTip(
-            "Load a CSV file with 'en' and 'vi' columns to use as a translation dictionary.\n"
-            "Matched entries bypass the translation API (EN→VI only)."
-        )
-        self.areas_layout.addWidget(self.dict_group)
-        self.dict_layout = QHBoxLayout(self.dict_group)
-        self.dict_layout.setSpacing(8)
-        self.dict_layout.setContentsMargins(10, 15, 10, 10)
-
-        self.dict_load_button = QPushButton("📂 Load CSV…")
-        self.dict_load_button.setToolTip("Select a CSV file containing 'en' and 'vi' columns")
-        self.dict_load_button.clicked.connect(self._load_csv_dictionary)
-        self.dict_layout.addWidget(self.dict_load_button)
-
-        self.dict_clear_button = QPushButton("🗑 Clear")
-        self.dict_clear_button.setToolTip("Clear the loaded dictionary")
-        self.dict_clear_button.clicked.connect(self._clear_csv_dictionary)
-        self.dict_clear_button.setEnabled(False)
-        self.dict_layout.addWidget(self.dict_clear_button)
-
-        self.dict_status_label = QLabel("Not loaded")
-        self.dict_status_label.setToolTip("Status of the CSV dictionary")
-        self.dict_layout.addWidget(self.dict_status_label, stretch=1)
-        # --- End Dictionary (CSV) group ---
-
         self.areas_tree = QTreeWidget()
         self.areas_tree.setHeaderLabels(["Name", "Position", "Size", "Action"])
         self.areas_tree.setStyleSheet(f"background-color: {self.frame_bg};")
@@ -1086,72 +1047,6 @@ class MainWindow(QMainWindow):
         return self.selected_capture_hwnd
 
     # --- End capture window helpers ---
-
-    # --- Dictionary (CSV) helpers ---
-
-    def _load_csv_dictionary(self):
-        """Open a file dialog to select a CSV file and load it into the TextProcessor dictionary."""
-        if self.text_processor is None:
-            QMessageBox.warning(
-                self,
-                "Translation Not Available",
-                "Translation service is not initialized. Please fix the translation settings (e.g. API key) and restart the application."
-            )
-            return
-        filepath, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select CSV Dictionary File",
-            "",
-            "CSV files (*.csv);;All files (*.*)"
-        )
-        if not filepath:
-            return  # user cancelled
-
-        try:
-            entries, total_rows, skipped_rows = parse_csv_dictionary(filepath)
-            if not entries:
-                QMessageBox.warning(
-                    self,
-                    "Dictionary Empty",
-                    f"No valid entries found in the CSV file.\n"
-                    f"Total rows: {total_rows}, Skipped: {skipped_rows}\n\n"
-                    "Make sure the file has at least two columns (en, vi)."
-                )
-                return
-
-            loaded_count = self.text_processor.set_dictionary(entries)
-            self.dict_clear_button.setEnabled(True)
-            status_msg = f"✅ {loaded_count} entries"
-            if skipped_rows:
-                status_msg += f" ({skipped_rows} skipped)"
-            self.dict_status_label.setText(status_msg)
-            self.dict_status_label.setToolTip(
-                f"File: {filepath}\n"
-                f"Total rows: {total_rows}\n"
-                f"Loaded: {loaded_count}\n"
-                f"Skipped: {skipped_rows}"
-            )
-            logger.info(f"CSV dictionary loaded: {loaded_count} entries from '{filepath}' "
-                        f"(total_rows={total_rows}, skipped={skipped_rows})")
-        except Exception as e:
-            logger.error(f"Error loading CSV dictionary: {e}", exc_info=True)
-            QMessageBox.critical(
-                self,
-                "Dictionary Load Error",
-                f"Failed to load the CSV file:\n{e}"
-            )
-
-    def _clear_csv_dictionary(self):
-        """Clear the loaded dictionary from TextProcessor."""
-        if self.text_processor is None:
-            return
-        self.text_processor.clear_dictionary()
-        self.dict_clear_button.setEnabled(False)
-        self.dict_status_label.setText("Not loaded")
-        self.dict_status_label.setToolTip("Status of the CSV dictionary")
-        logger.info("CSV dictionary cleared by user")
-
-    # --- End Dictionary (CSV) helpers ---
 
     def load_saved_areas(self):
         """Load saved areas from configuration."""
