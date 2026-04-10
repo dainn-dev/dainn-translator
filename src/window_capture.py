@@ -74,6 +74,9 @@ if IS_WINDOWS:
     WS_EX_NOACTIVATE = 0x08000000
 
 
+from src.dx_capture import capture_window_wgc, capture_screen_mss, WGC_AVAILABLE
+
+
 class WindowInfo(NamedTuple):
     """Information about a visible window."""
     hwnd: int
@@ -177,73 +180,74 @@ def get_client_origin_and_size(hwnd: int) -> Optional[Tuple[int, int, int, int]]
 
 def capture_window_client(hwnd: int) -> Optional[np.ndarray]:
     """
-    Capture the client area of a window using PrintWindow (PW_CLIENTONLY).
-    Returns a BGR numpy array (compatible with OpenCV) or None on failure.
-    This captures the window content even if it is partially or fully occluded.
+    Capture the client area of a window.
+    Priority: WGC (DX11/12 compatible) -> mss region -> PrintWindow (GDI fallback)
     """
     if not IS_WINDOWS:
         return None
 
+    # 1. Try Windows Graphics Capture API first (works with DX11/12)
+    if WGC_AVAILABLE:
+        img = capture_window_wgc(hwnd)
+        if img is not None:
+            return img
+        logger.debug("WGC capture failed, falling back to mss region")
+
+    # 2. Try mss with window screen coordinates (DXGI, works with DX11/12)
+    info = get_client_origin_and_size(hwnd)
+    if info is not None:
+        origin_x, origin_y, client_w, client_h = info
+        img = capture_screen_mss(origin_x, origin_y, client_w, client_h)
+        if img is not None:
+            return img
+        logger.debug("mss region capture failed, falling back to PrintWindow")
+
+    # 3. Fallback: PrintWindow (GDI — works for non-DX apps)
     try:
-        info = get_client_origin_and_size(hwnd)
+        if info is None:
+            info = get_client_origin_and_size(hwnd)
         if info is None:
             return None
         _, _, width, height = info
 
-        # Get device context
         hwnd_dc = GetDC(hwnd)
         if not hwnd_dc:
             return None
-
-        # Create compatible DC and bitmap
         mem_dc = gdi32.CreateCompatibleDC(hwnd_dc)
         if not mem_dc:
             ReleaseDC(hwnd, hwnd_dc)
             return None
-
         bmp = gdi32.CreateCompatibleBitmap(hwnd_dc, width, height)
         if not bmp:
             gdi32.DeleteDC(mem_dc)
             ReleaseDC(hwnd, hwnd_dc)
             return None
-
         old_bmp = gdi32.SelectObject(mem_dc, bmp)
-
-        # Use PrintWindow with PW_CLIENTONLY to render the client area into our DC
         result = PrintWindow(hwnd, mem_dc, PW_CLIENTONLY)
         if not result:
-            # Fallback: try BitBlt (may include overlapping windows)
             gdi32.BitBlt(mem_dc, 0, 0, width, height, hwnd_dc, 0, 0, SRCCOPY)
 
-        # Prepare BITMAPINFO for GetDIBits
         bmi = BITMAPINFO()
         bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
         bmi.bmiHeader.biWidth = width
-        bmi.bmiHeader.biHeight = -height  # top-down
+        bmi.bmiHeader.biHeight = -height
         bmi.bmiHeader.biPlanes = 1
-        bmi.bmiHeader.biBitCount = 32  # BGRA
+        bmi.bmiHeader.biBitCount = 32
         bmi.bmiHeader.biCompression = BI_RGB
 
-        # Allocate buffer
         buffer_size = width * height * 4
         buffer = ctypes.create_string_buffer(buffer_size)
-
         gdi32.GetDIBits(mem_dc, bmp, 0, height, buffer, ctypes.byref(bmi), DIB_RGB_COLORS)
 
-        # Cleanup GDI objects
         gdi32.SelectObject(mem_dc, old_bmp)
         gdi32.DeleteObject(bmp)
         gdi32.DeleteDC(mem_dc)
         ReleaseDC(hwnd, hwnd_dc)
 
-        # Convert to numpy array (BGRA -> BGR)
         img = np.frombuffer(buffer, dtype=np.uint8).reshape(height, width, 4)
-        img_bgr = img[:, :, :3].copy()  # Drop alpha channel
-
-        return img_bgr
-
+        return img[:, :, :3].copy()
     except Exception as e:
-        logger.error(f"Error capturing window client for hwnd {hwnd}: {e}", exc_info=True)
+        logger.error(f"PrintWindow fallback failed for hwnd {hwnd}: {e}", exc_info=True)
         return None
 
 
