@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QShortcut
 )
-from PyQt5.QtCore import Qt, QTimer, QPoint, QCoreApplication, QAbstractNativeEventFilter, QEvent
+from PyQt5.QtCore import Qt, QTimer, QPoint, QCoreApplication, QEvent
 from PyQt5.QtGui import QFont, QColor, QKeySequence
 from src.config_manager import ConfigManager
 from src.text_processing import TextProcessor
@@ -32,60 +32,12 @@ import cv2
 logger = logging.getLogger(__name__)
 
 IS_WINDOWS = os.name == 'nt'
-WM_HOTKEY = 0x0312
-MOD_CONTROL = 0x0002
-MOD_SHIFT = 0x0004
-MOD_ALT = 0x0001
 HOTKEY_ID_BASE = 0xA000
 
-# Virtual key code mapping
-VK_CODES = {
-    # Numbers
-    '0': 0x30, '1': 0x31, '2': 0x32, '3': 0x33, '4': 0x34,
-    '5': 0x35, '6': 0x36, '7': 0x37, '8': 0x38, '9': 0x39,
-    # Letters
-    'A': 0x41, 'B': 0x42, 'C': 0x43, 'D': 0x44, 'E': 0x45,
-    'F': 0x46, 'G': 0x47, 'H': 0x48, 'I': 0x49, 'J': 0x4A,
-    'K': 0x4B, 'L': 0x4C, 'M': 0x4D, 'N': 0x4E, 'O': 0x4F,
-    'P': 0x50, 'Q': 0x51, 'R': 0x52, 'S': 0x53, 'T': 0x54,
-    'U': 0x55, 'V': 0x56, 'W': 0x57, 'X': 0x58, 'Y': 0x59, 'Z': 0x5A,
-    # Function keys
-    'F1': 0x70, 'F2': 0x71, 'F3': 0x72, 'F4': 0x73, 'F5': 0x74, 'F6': 0x75,
-    'F7': 0x76, 'F8': 0x77, 'F9': 0x78, 'F10': 0x79, 'F11': 0x7A, 'F12': 0x7B,
-    # Special keys
-    'SPACE': 0x20, 'PAGEUP': 0x21, 'PAGEDOWN': 0x22, 'END': 0x23, 'HOME': 0x24,
-    'LEFT': 0x25, 'UP': 0x26, 'RIGHT': 0x27, 'DOWN': 0x28,
-    'INSERT': 0x2D, 'DELETE': 0x2E,
-    # Symbol keys
-    '`': 0xC0, '-': 0xBD, '=': 0xBB, '[': 0xDB, ']': 0xDD,
-    '\\': 0xDC, ';': 0xBA, "'": 0xDE, ',': 0xBC, '.': 0xBE, '/': 0xBF,
-}
-
-if IS_WINDOWS:
-
-    class WindowsHotkeyFilter(QAbstractNativeEventFilter):
-        """Event filter to capture native WM_HOTKEY events."""
-
-        def __init__(self, callback: Callable):
-            super().__init__()
-            self.callback = callback
-            self.hotkey_id: Optional[int] = None
-
-        def set_hotkey_id(self, hotkey_id: Optional[int]):
-            self.hotkey_id = hotkey_id
-
-        def nativeEventFilter(self, event_type, message):
-            if self.hotkey_id is None:
-                return False, 0
-            if event_type == "windows_generic_MSG":
-                try:
-                    msg = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG)).contents
-                except (ValueError, TypeError):
-                    return False, 0
-                if msg.message == WM_HOTKEY and msg.wParam == self.hotkey_id:
-                    QTimer.singleShot(0, self.callback)
-                    return True, 0
-            return False, 0
+from src.ui.hotkey_utils import (
+    VK_CODES, MOD_CONTROL, MOD_SHIFT, MOD_ALT, WM_HOTKEY,
+    WindowsHotkeyFilter, parse_hotkey as _parse_hotkey
+)
 
 
 class TranslationCache:
@@ -207,6 +159,9 @@ class TranslationWindow(QMainWindow):
         # Initialize translation cache and rate limiter
         self.translation_cache = TranslationCache(max_size=None, expiration_minutes=10/60)  # Unlimited cache with 10s expiration
         self.rate_limiter = RateLimiter(max_calls=None, time_window=None)  # Unlimited requests
+
+        # Persistent thread pool executor (avoids recreating on every tick)
+        self._executor = ThreadPoolExecutor(max_workers=2)
 
         # Window-based capture (set externally by MainWindow before timer starts)
         self.capture_hwnd: Optional[int] = None   # target window handle
@@ -423,40 +378,6 @@ class TranslationWindow(QMainWindow):
         self.toggle_shortcut.activated.connect(self.toggle_all_operations)
         self.register_global_hotkey()
     
-    def parse_hotkey(self, hotkey: str) -> Tuple[int, int]:
-        """Parse hotkey string and return (modifier, virtual_key) tuple."""
-        parts = hotkey.split('+')
-        modifier = 0
-        key = None
-        
-        # Parse each part
-        for part in parts:
-            part_upper = part.strip().upper()
-            
-            # Check for modifiers
-            if part_upper == 'CTRL':
-                modifier |= MOD_CONTROL
-            elif part_upper == 'SHIFT':
-                modifier |= MOD_SHIFT
-            elif part_upper == 'ALT':
-                modifier |= MOD_ALT
-            else:
-                # This should be the key
-                # Try to find it in VK_CODES (check uppercase for letters)
-                if part_upper in VK_CODES:
-                    key = VK_CODES[part_upper]
-                elif part in VK_CODES:  # For symbols that might be case-sensitive
-                    key = VK_CODES[part]
-                else:
-                    logger.warning(f"Unknown key in hotkey: {part}")
-        
-        # Default to VK_1 if no key was found
-        if key is None:
-            logger.warning(f"No valid key found in hotkey '{hotkey}', defaulting to '1'")
-            key = VK_CODES['1']
-        
-        return (modifier, key)
-
     def register_global_hotkey(self):
         """Register a system-wide hotkey using the native Windows API."""
         if not IS_WINDOWS:
@@ -478,7 +399,7 @@ class TranslationWindow(QMainWindow):
         
         # Parse the hotkey from settings
         hotkey = self.settings.get('toggle_hotkey', 'Ctrl+1')
-        modifier, vk_key = self.parse_hotkey(hotkey)
+        modifier, vk_key = _parse_hotkey(hotkey, default_key='1')
         
         if not user32.RegisterHotKey(None, self.global_hotkey_id, modifier, vk_key):
             error_code = ctypes.windll.kernel32.GetLastError()
@@ -530,26 +451,6 @@ class TranslationWindow(QMainWindow):
             return False
         return hash1 == hash2
     
-    def calculate_frame_similarity(self, frame1: np.ndarray, frame2: np.ndarray) -> float:
-        """Calculate similarity between two frames using structural similarity index."""
-        try:
-            # Resize frames to same size for comparison
-            size = (128, 128)
-            frame1_resized = cv2.resize(frame1, size)
-            frame2_resized = cv2.resize(frame2, size)
-            
-            # Convert to grayscale
-            gray1 = cv2.cvtColor(frame1_resized, cv2.COLOR_RGB2GRAY)
-            gray2 = cv2.cvtColor(frame2_resized, cv2.COLOR_RGB2GRAY)
-            
-            # Calculate structural similarity
-            from skimage.metrics import structural_similarity as ssim
-            similarity = ssim(gray1, gray2)
-            return similarity
-        except Exception as e:
-            logger.error(f"Error calculating frame similarity: {str(e)}")
-            return 0.0
-
     def position_buttons(self):
         """Position the buttons."""
         # Position capture button in top-left corner with 15px margin
@@ -640,14 +541,18 @@ class TranslationWindow(QMainWindow):
             # Stop the translation process
             self.running = False
             self.is_capturing = False
-            
+
             # Stop timers
             if hasattr(self, 'timer') and self.timer:
                 self.timer.stop()
             if hasattr(self, 'translation_cache') and hasattr(self.translation_cache, 'cleanup_timer'):
                 self.translation_cache.cleanup_timer.stop()
             self.unregister_global_hotkey()
-            
+
+            # Shut down the persistent executor
+            if hasattr(self, '_executor'):
+                self._executor.shutdown(wait=False)
+
             # Accept the close event
             event.accept()
             
@@ -802,9 +707,7 @@ class TranslationWindow(QMainWindow):
             logger.debug(f"Capturing region: {self.region}")
             
             # Capture ROI (window-based or screen fallback) in a thread
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(self._capture_roi)
-                screenshot = future.result()
+            screenshot = self._executor.submit(self._capture_roi).result()
 
             if screenshot is None or screenshot.size == 0:
                 logger.warning("Capture returned empty image")
@@ -814,16 +717,11 @@ class TranslationWindow(QMainWindow):
             # Check for frame changes before calling Vision API
             current_frame_hash = self.get_frame_hash(screenshot)
             
-            # Use both hash comparison and structural similarity for better detection
+            # Use hash comparison for frame change detection
             frames_similar = False
             if self.last_frame is not None and self.last_frame_hash is not None:
-                # Quick hash check first
                 if self.frames_are_similar(current_frame_hash, self.last_frame_hash):
                     frames_similar = True
-                else:
-                    # If hash is different, check structural similarity for subtle changes
-                    similarity = self.calculate_frame_similarity(screenshot, self.last_frame)
-                    frames_similar = similarity > self.min_change_threshold
             
             # If frame hasn't changed significantly, skip Vision API call
             if frames_similar:
@@ -932,9 +830,7 @@ class TranslationWindow(QMainWindow):
                         self.translation_counter_label.setText(f"Translation API: {self.text_processor.translation_api_calls_today} requests")
                 return translated
             
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(translate_text)
-                translated_text = future.result()
+            translated_text = self._executor.submit(translate_text).result()
             
             # Check if translation was successful
             if not translated_text or translated_text.strip() == "":
@@ -986,7 +882,11 @@ class TranslationWindow(QMainWindow):
             decoded_text = html.unescape(text)
             
             if ":" in decoded_text:
-                name, dialogue = decoded_text.split(":", 1)
+                before_colon, after_colon = decoded_text.split(":", 1)
+                if len(before_colon.strip()) <= 30 and ' ' not in before_colon.strip():
+                    name, dialogue = before_colon, after_colon
+                else:
+                    name, dialogue = "", decoded_text
                 name_text = name.strip()
                 dialogue_text = dialogue.strip()
                 logger.info(f"Setting name label: '{name_text}'")
@@ -1029,7 +929,6 @@ class TranslationWindow(QMainWindow):
             if hasattr(self, 'content_widget'):
                 self.content_widget.update()
             self.update()
-            QApplication.processEvents()  # Force Qt to process events and update UI
             
             logger.info(f"Text update completed. Name label text: '{self.name_label.text()[:50]}...', Dialogue label text: '{self.dialogue_label.text()[:50]}...'")
         except Exception as e:
