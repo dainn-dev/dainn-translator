@@ -1,5 +1,6 @@
 import html
 import pyautogui
+from src.dx_capture import capture_screen_mss, MSS_AVAILABLE
 import numpy as np
 from PyQt5.QtWidgets import (
     QMainWindow,
@@ -778,10 +779,13 @@ class TranslationWindow(QMainWindow):
             return self._capture_roi_screen()
 
     def _capture_roi_screen(self) -> Optional[np.ndarray]:
-        """Fallback: capture a region directly from the screen using pyautogui."""
+        """Capture a screen region using mss (DXGI) for DX11/12 compatibility."""
         if not self.region:
             return None
         x, y, w, h = self.region
+        if MSS_AVAILABLE:
+            return capture_screen_mss(x, y, w, h)
+        # Fallback to pyautogui if mss not installed
         screenshot = pyautogui.screenshot(region=(x, y, w, h))
         return np.array(screenshot)
 
