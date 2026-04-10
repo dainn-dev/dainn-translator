@@ -22,61 +22,15 @@ logger = logging.getLogger(__name__)
 
 # Import Windows hotkey support
 IS_WINDOWS = os.name == 'nt'
+from src.ui.hotkey_utils import (
+    VK_CODES, MOD_CONTROL, MOD_SHIFT, MOD_ALT, WM_HOTKEY,
+    WindowsHotkeyFilter as WindowsHotkeyFilterMain,
+    parse_hotkey as _parse_hotkey
+)
 if IS_WINDOWS:
     import ctypes
     from ctypes import wintypes
-    WM_HOTKEY = 0x0312
-    MOD_CONTROL = 0x0002
-    MOD_SHIFT = 0x0004
-    MOD_ALT = 0x0001
     HOTKEY_ID_BASE_MAIN = 0xB000
-    
-    # Virtual key code mapping (from translation_window.py)
-    VK_CODES = {
-        # Numbers
-        '0': 0x30, '1': 0x31, '2': 0x32, '3': 0x33, '4': 0x34,
-        '5': 0x35, '6': 0x36, '7': 0x37, '8': 0x38, '9': 0x39,
-        # Letters
-        'A': 0x41, 'B': 0x42, 'C': 0x43, 'D': 0x44, 'E': 0x45,
-        'F': 0x46, 'G': 0x47, 'H': 0x48, 'I': 0x49, 'J': 0x4A,
-        'K': 0x4B, 'L': 0x4C, 'M': 0x4D, 'N': 0x4E, 'O': 0x4F,
-        'P': 0x50, 'Q': 0x51, 'R': 0x52, 'S': 0x53, 'T': 0x54,
-        'U': 0x55, 'V': 0x56, 'W': 0x57, 'X': 0x58, 'Y': 0x59, 'Z': 0x5A,
-        # Function keys
-        'F1': 0x70, 'F2': 0x71, 'F3': 0x72, 'F4': 0x73, 'F5': 0x74, 'F6': 0x75,
-        'F7': 0x76, 'F8': 0x77, 'F9': 0x78, 'F10': 0x79, 'F11': 0x7A, 'F12': 0x7B,
-        # Special keys
-        'SPACE': 0x20, 'PAGEUP': 0x21, 'PAGEDOWN': 0x22, 'END': 0x23, 'HOME': 0x24,
-        'LEFT': 0x25, 'UP': 0x26, 'RIGHT': 0x27, 'DOWN': 0x28,
-        'INSERT': 0x2D, 'DELETE': 0x2E,
-        # Symbol keys
-        '`': 0xC0, '-': 0xBD, '=': 0xBB, '[': 0xDB, ']': 0xDD,
-        '\\': 0xDC, ';': 0xBA, "'": 0xDE, ',': 0xBC, '.': 0xBE, '/': 0xBF,
-    }
-    
-    class WindowsHotkeyFilterMain(QAbstractNativeEventFilter):
-        """Event filter to capture native WM_HOTKEY events for MainWindow."""
-        
-        def __init__(self, callback: callable):
-            super().__init__()
-            self.callback = callback
-            self.hotkey_id: Optional[int] = None
-        
-        def set_hotkey_id(self, hotkey_id: Optional[int]):
-            self.hotkey_id = hotkey_id
-        
-        def nativeEventFilter(self, event_type, message):
-            if self.hotkey_id is None:
-                return False, 0
-            if event_type == "windows_generic_MSG":
-                try:
-                    msg = ctypes.cast(int(message), ctypes.POINTER(wintypes.MSG)).contents
-                except (ValueError, TypeError):
-                    return False, 0
-                if msg.message == WM_HOTKEY and msg.wParam == self.hotkey_id:
-                    QTimer.singleShot(0, self.callback)
-                    return True, 0
-            return False, 0
 
 
 class LLMInitializationThread(QThread):
@@ -217,9 +171,9 @@ class MainWindow(QMainWindow):
     def __init__(self, text_processor: TextProcessor, config_manager: ConfigManager = None):
         super().__init__()
         self.setWindowTitle("Real-time Screen Translator - Settings & Areas")
-        self.setGeometry(100, 100, 900, 400)
+        self.setGeometry(100, 100, 1000, 800)
         # Set minimum window size to prevent window from being too small
-        self.setMinimumSize(1000, 800)  # Minimum width: 700px, Minimum height: 400px
+        self.setMinimumSize(1000, 800)
         try:
             self.setWindowIcon(QIcon(os.path.join(os.path.dirname(__file__), "../../resources/logo.ico")))
         except Exception as e:
@@ -479,7 +433,7 @@ class MainWindow(QMainWindow):
         self.bg_layout.addWidget(self.opacity_label)
         self.opacity_edit = QLineEdit()
         self.opacity_edit.setFixedWidth(50)
-        self.opacity_edit.setText('0.85')
+        self.opacity_edit.setText(self.config_manager.get_global_setting('opacity', '0.85'))
         self.opacity_edit.setPlaceholderText("0.85")
         self.opacity_edit.setToolTip("Enter opacity value between 0.1 and 1.0 (recommended: 0.7-0.9)")
         self.opacity_edit.textChanged.connect(self.update_opacity)
@@ -1237,13 +1191,12 @@ class MainWindow(QMainWindow):
             if area_id in self.translation_windows:
                 window = self.translation_windows[area_id]
                 # Stop capturing
-                if hasattr(window, 'is_capturing'):
-                    window.is_capturing = False
-                if hasattr(window, 'toggle_capture'):
-                    window.toggle_capture()
-                # Stop the timer
+                window.is_capturing = False
+                window.running = False
                 if hasattr(window, 'timer') and window.timer:
                     window.timer.stop()
+                if hasattr(window, 'update_capture_button_state'):
+                    window.update_capture_button_state()
                 # Hide the window
                 window.hide()
                 
@@ -1302,15 +1255,15 @@ class MainWindow(QMainWindow):
                                        "Please select a region inside the target window.")
                     return
 
-                # Get existing area IDs
+                # Get existing area IDs (stored as strings)
                 existing_ids = set()
                 for i in range(self.areas_tree.topLevelItemCount()):
                     item = self.areas_tree.topLevelItem(i)
-                    existing_ids.add(int(item.data(0, Qt.UserRole)))
+                    existing_ids.add(item.data(0, Qt.UserRole))
 
-                # Find the next available ID
+                # Find the next available ID (compare as strings)
                 new_id = 1
-                while new_id in existing_ids:
+                while str(new_id) in existing_ids:
                     new_id += 1
 
                 area_id = str(new_id)
@@ -1508,8 +1461,12 @@ class MainWindow(QMainWindow):
 
             translation_window.show()
 
-            # Disable settings when translation window is opened
-            self.update_settings_state(False)
+            # Disable settings only if at least one window is actively capturing
+            any_capturing = any(
+                getattr(w, 'is_capturing', False)
+                for w in self.translation_windows.values()
+            )
+            self.update_settings_state(not any_capturing)
 
             # Update action button state to show "Stop"
             self._update_action_button(area_id, running=True)
@@ -1569,9 +1526,6 @@ class MainWindow(QMainWindow):
                 if reply == QMessageBox.No:
                     event.ignore()
                     return
-            
-            # Unregister add area hotkey
-            self.unregister_add_area_hotkey()
             
             # Unregister add area hotkey
             self.unregister_add_area_hotkey()
@@ -1808,6 +1762,7 @@ class MainWindow(QMainWindow):
 
     def load_languages_from_config(self):
         """Load languages from configuration."""
+        languages = {}
         try:
             languages = self.config_manager.get_all_languages()
             if not languages:
@@ -1840,10 +1795,13 @@ class MainWindow(QMainWindow):
             source_lang = self.language_name_to_code.get(self.source_lang_combo.currentText(), 'en')
             target_lang = self.language_name_to_code.get(self.target_lang_combo.currentText(), 'vi')
             if source_lang == target_lang:
-                QMessageBox.warning(self, "Warning", "Source and target languages cannot be the same. Please select different languages.")
-                self.target_lang_combo.setCurrentText(self.config_manager.get_language_name(
-                    self.config_manager.get_global_setting('target_language', 'vi')))
-                return
+                # Automatically pick a different target language instead of showing a modal dialog
+                fallback = 'vi' if source_lang != 'vi' else 'en'
+                fallback_name = self.config_manager.get_language_name(fallback)
+                self.target_lang_combo.blockSignals(True)
+                self.target_lang_combo.setCurrentText(fallback_name)
+                self.target_lang_combo.blockSignals(False)
+                target_lang = fallback
 
             settings = {
                 'font_family': self.font_combo.currentText(),
@@ -1978,54 +1936,21 @@ class MainWindow(QMainWindow):
     
     def validate_hotkey(self, hotkey: str) -> bool:
         """Validate hotkey format."""
-        if not hotkey or '+' not in hotkey:
+        if not hotkey:
             return False
-        
+        if '+' not in hotkey:
+            # Allow bare function keys F1-F12
+            return hotkey.upper() in VK_CODES and hotkey.upper().startswith('F')
+
         parts = hotkey.split('+')
         if len(parts) < 2:
             return False
-        
+
         # Check if at least one modifier is present
         modifiers = {'Ctrl', 'Shift', 'Alt'}
         has_modifier = any(mod in parts for mod in modifiers)
         
         return has_modifier
-    
-    def parse_hotkey(self, hotkey: str):
-        """Parse hotkey string and return (modifier, virtual_key) tuple."""
-        if not IS_WINDOWS:
-            return (0, 0)
-        
-        parts = hotkey.split('+')
-        modifier = 0
-        key = None
-        
-        # Parse each part
-        for part in parts:
-            part_upper = part.strip().upper()
-            
-            # Check for modifiers
-            if part_upper == 'CTRL':
-                modifier |= MOD_CONTROL
-            elif part_upper == 'SHIFT':
-                modifier |= MOD_SHIFT
-            elif part_upper == 'ALT':
-                modifier |= MOD_ALT
-            else:
-                # This should be the key
-                if part_upper in VK_CODES:
-                    key = VK_CODES[part_upper]
-                elif part in VK_CODES:
-                    key = VK_CODES[part]
-                else:
-                    logger.warning(f"Unknown key in hotkey: {part}")
-        
-        # Default to VK_2 if no key was found
-        if key is None:
-            logger.warning(f"No valid key found in hotkey '{hotkey}', defaulting to '2'")
-            key = VK_CODES.get('2', 0x32)
-        
-        return (modifier, key)
     
     def register_add_area_hotkey(self):
         """Register a system-wide hotkey for adding translation areas."""
@@ -2052,7 +1977,7 @@ class MainWindow(QMainWindow):
         
         # Parse the hotkey from settings
         hotkey = self.config_manager.get_add_area_hotkey()
-        modifier, vk_key = self.parse_hotkey(hotkey)
+        modifier, vk_key = _parse_hotkey(hotkey, default_key='2')
         
         if not user32.RegisterHotKey(None, self.add_area_hotkey_id, modifier, vk_key):
             error_code = ctypes.windll.kernel32.GetLastError()
@@ -2311,7 +2236,11 @@ class MainWindow(QMainWindow):
                 self.libretranslate_ocr_mode_combo.blockSignals(True)
                 self.libretranslate_ocr_mode_combo.setCurrentIndex(mode_index)
                 self.libretranslate_ocr_mode_combo.blockSignals(False)
-            
+            if hasattr(self, 'gemini_ocr_mode_combo') and sender != self.gemini_ocr_mode_combo:
+                self.gemini_ocr_mode_combo.blockSignals(True)
+                self.gemini_ocr_mode_combo.setCurrentIndex(mode_index)
+                self.gemini_ocr_mode_combo.blockSignals(False)
+
             # Update Tesseract path field visibility based on OCR mode
             is_tesseract_mode = (mode == 'tesseract')
             if hasattr(self, 'tesseract_path_layout'):
@@ -2324,7 +2253,12 @@ class MainWindow(QMainWindow):
                     widget = self.libretranslate_tesseract_path_layout.itemAt(i).widget()
                     if widget:
                         widget.setVisible(is_tesseract_mode)
-            
+            if hasattr(self, 'gemini_tesseract_path_layout'):
+                for i in range(self.gemini_tesseract_path_layout.count()):
+                    widget = self.gemini_tesseract_path_layout.itemAt(i).widget()
+                    if widget:
+                        widget.setVisible(is_tesseract_mode)
+
             logger.info(f"OCR mode changed to: {mode}")
         except Exception as e:
             logger.error(f"Error changing OCR mode: {str(e)}", exc_info=True)
@@ -2338,12 +2272,16 @@ class MainWindow(QMainWindow):
                 path = self.tesseract_path_edit.text().strip()
             elif hasattr(self, 'libretranslate_tesseract_path_edit') and sender == self.libretranslate_tesseract_path_edit:
                 path = self.libretranslate_tesseract_path_edit.text().strip()
+            elif hasattr(self, 'gemini_tesseract_path_edit') and sender == self.gemini_tesseract_path_edit:
+                path = self.gemini_tesseract_path_edit.text().strip()
             else:
                 # Fallback: try to get from whichever is visible
                 if hasattr(self, 'tesseract_path_edit') and self.tesseract_path_edit.isVisible():
                     path = self.tesseract_path_edit.text().strip()
                 elif hasattr(self, 'libretranslate_tesseract_path_edit') and self.libretranslate_tesseract_path_edit.isVisible():
                     path = self.libretranslate_tesseract_path_edit.text().strip()
+                elif hasattr(self, 'gemini_tesseract_path_edit') and self.gemini_tesseract_path_edit.isVisible():
+                    path = self.gemini_tesseract_path_edit.text().strip()
                 else:
                     path = self.config_manager.get_tesseract_path()
             
@@ -2367,7 +2305,11 @@ class MainWindow(QMainWindow):
                 self.libretranslate_tesseract_path_edit.blockSignals(True)
                 self.libretranslate_tesseract_path_edit.setText(path)
                 self.libretranslate_tesseract_path_edit.blockSignals(False)
-            
+            if hasattr(self, 'gemini_tesseract_path_edit') and sender != self.gemini_tesseract_path_edit:
+                self.gemini_tesseract_path_edit.blockSignals(True)
+                self.gemini_tesseract_path_edit.setText(path)
+                self.gemini_tesseract_path_edit.blockSignals(False)
+
             logger.info(f"Tesseract path changed to: {path if path else 'system PATH'}")
         except Exception as e:
             logger.error(f"Error changing Tesseract path: {str(e)}", exc_info=True)
